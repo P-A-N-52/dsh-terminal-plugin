@@ -1,10 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createCompleter } from '../src/completion.js'
+import { createCompleter, slashEntries } from '../src/completion.js'
 
 function controllerStub(overrides = {}) {
   return {
     hostCommands: [{ name: 'plan' }, { name: 'compact' }],
+    skills: [],
     modelOptions: () => [{ provider: 'deepseek', model: 'deepseek-chat' }],
     reasoningOptions: () => ({ efforts: [{ id: 'high' }, { id: 'max' }] }),
     permissionView: () => ({ options: [{ value: 'read-only' }, { value: 'workspace-write' }] }),
@@ -57,4 +58,12 @@ test('free-text and unknown commands offer no argument completion', async () => 
   const complete = createCompleter({ controller: controllerStub() })
   assert.deepEqual(await complete('/rename tit'), [[], '/rename tit'])
   assert.deepEqual(await complete('/plan on'), [[], '/plan on'])
+})
+
+test('skills merge into menu entries and /skill argument completion', async () => {
+  const controller = controllerStub({ skills: [{ name: 'code-style', description: '代码风格' }] })
+  const entries = slashEntries(controller)
+  assert.ok(entries.some(entry => entry.name === '/code-style' && entry.description.includes('技能')))
+  const complete = createCompleter({ controller })
+  assert.deepEqual(await complete('/skill code'), [['code-style'], 'code'])
 })

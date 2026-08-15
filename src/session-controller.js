@@ -1,8 +1,10 @@
 import { EventEmitter } from 'node:events'
 import { resolve } from 'node:path'
+import { writeFile } from 'node:fs/promises'
 import {
   deferred,
   extractTextBlocks,
+  formatDuration,
   mergeUsage,
   parseProviderModel,
   sessionTitle,
@@ -26,6 +28,9 @@ export class SessionController extends EventEmitter {
     this.modelsSnapshot = undefined
     this.projections = {}
     this.hostCommands = []
+    this.skills = []
+    this.jobs = []
+    this.jobsSeen = new Map()
     this.routable = undefined
     this.hostDescription = undefined
     this.running = false
@@ -110,9 +115,12 @@ export class SessionController extends EventEmitter {
       maxMessages: showHistory ? 50 : 1,
     })
     this.projections = { ...(history.projections?.values ?? {}) }
+    this.jobs = []
+    this.jobsSeen.clear()
     const entries = [...history.events].sort((a, b) => a.event.seq - b.event.seq)
     await this.refreshModels({ quiet: true })
     await this.refreshHostCommands()
+    await this.refreshSkills()
     this.renderer.banner(this.statusInfo())
     for (const entry of entries) {
       await this.processEvent(entry.event, entry.view, { history: true, render: showHistory })
@@ -133,7 +141,19 @@ export class SessionController extends EventEmitter {
     const prompt = String(text)
     if (prompt.trim() === '') return
     if (!this.sessionId) throw new Error('还没有活动会话')
-    this.assertIdle('发送消息')
+    if (this.running || this.activeTurn) {
+      // A turn is in flight: inject as a steering message instead of
+      // rejecting, so the user can redirect without cancelling first.
+      await this.client.call('session.prompt', {
+        sessionId: this.sessionId,
+        mode: 'steer',
+        content: [{ type: 'text', text: prompt }],
+        clientTimeZone: currentTimeZone(),
+      }, { timeoutMs: 60_000 })
+      this.renderer.user(prompt)
+      this.renderer.notice('已作为 steering 消息注入当前回合')
+      return { kind: 'steer' }
+    }
     const active = {
       deferred: deferred(),
       startedAt: Date.now(),
@@ -376,6 +396,9 @@ export class SessionController extends EventEmitter {
       case 'session/queue':
         this.renderer.queueStatus(frame.items.length)
         break
+      case 'session/jobs':
+        this.trackJobs(frame)
+        break
       case 'session/projection':
         if (typeof frame.key === 'string') {
           const previous = this.projections[frame.key]
@@ -405,6 +428,9 @@ export class SessionController extends EventEmitter {
       case 'host/session-removed':
         this.running = false
         this.rejectActive(new Error(`会话 ${frame.sessionId} 已被删除`))
+        break
+      case 'host/remote-event':
+        this.onRemoteEvent(frame)
         break
       default:
         break
@@ -441,6 +467,94 @@ export class SessionController extends EventEmitter {
       if (now) this.renderer.notice(`目标已更新：${truncate(now, 60)}`)
       else this.renderer.notice('目标已清除')
     }
+  }
+
+  /** Mirror the session's background jobs and summarize ones that just settled. */
+  trackJobs(frame) {
+    const jobs = Array.isArray(frame.jobs) ? frame.jobs : []
+    this.jobs = jobs
+    for (const job of jobs) {
+      const id = job?.id
+      const status = String(job?.status ?? '')
+      if (id === undefined || status === '') continue
+      const previous = this.jobsSeen.get(id)
+      this.jobsSeen.set(id, status)
+      if (previous === undefined || previous === status || !isSettledJobStatus(status)) continue
+      const elapsed = Number.isFinite(job.startedAt) && Number.isFinite(job.endedAt)
+        ? `（${formatDuration(job.endedAt - job.startedAt)}）`
+        : ''
+      this.renderer.notice(`后台任务${status === 'failed' || status === 'error' ? '失败' : '结束'}：${job.label ?? job.kind ?? id}${elapsed}`)
+    }
+  }
+
+  /** Forwarded host events: keep local caches in sync with the live host. */
+  onRemoteEvent(frame) {
+    if (frame.event === 'commands/change') {
+      void this.refreshHostCommands().catch(() => undefined)
+      return
+    }
+    if (frame.event === 'agent-preset/selected') {
+      const [sessionId, agentPreset] = Array.isArray(frame.args) ? frame.args : []
+      if (sessionId === this.sessionId && typeof agentPreset === 'string') {
+        this.agentPreset = agentPreset
+        this.renderer.updateHeader({ agentPreset })
+      }
+    }
+  }
+
+  /** User-invocable skills on this session, for /skill and menu completion. */
+  async refreshSkills() {
+    if (!this.sessionId) return []
+    try {
+      const value = await this.client.call('skill.list', { sessionId: this.sessionId })
+      this.skills = Array.isArray(value?.skills) ? value.skills : []
+    } catch {
+      // Hosts without the skill surface leave skill names out of completion.
+      this.skills = []
+    }
+    return this.skills
+  }
+
+  /** Full-text search across sessions; hits merge titles from the session list. */
+  async searchSessions(query) {
+    const value = await this.client.call('session.search', { query: String(query) })
+    const items = Array.isArray(value?.items) ? value.items : []
+    if (items.length === 0) return { items, hasMore: Boolean(value?.hasMore) }
+    const listed = await this.listSessions().catch(() => [])
+    const titles = new Map(listed.map(item => [item.sessionId, item]))
+    return {
+      items: items.map(item => ({
+        ...item,
+        title: titles.get(item.sessionId)?.title,
+        cwd: titles.get(item.sessionId)?.cwd,
+      })),
+      hasMore: Boolean(value?.hasMore),
+    }
+  }
+
+  /**
+   * Download the session log ZIP through the host's export channel and write
+   * it next to the session's working directory.
+   * @param requested - optional session id or unique prefix; defaults to current.
+   */
+  async exportSession(requested) {
+    let sessionId = this.sessionId
+    if (requested) {
+      const sessions = await this.listSessions()
+      const exact = sessions.find(item => item.sessionId === requested)
+      const prefixed = sessions.filter(item => String(item.sessionId).startsWith(requested))
+      if (exact) sessionId = exact.sessionId
+      else if (prefixed.length === 1) sessionId = prefixed[0].sessionId
+      else if (prefixed.length > 1) throw new Error(`会话前缀 ${requested} 不唯一，请多输入几位`)
+      else throw new Error(`找不到会话 ${requested}`)
+    }
+    if (!sessionId) throw new Error('还没有活动会话')
+    const bytes = await this.client.downloadSessionZip(sessionId)
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+    const filename = `dsh-session-${sessionId.slice(8, 16)}-${stamp}.zip`
+    const path = resolve(this.cwd, filename)
+    await writeFile(path, bytes)
+    return { path, bytes: bytes.length }
   }
 
   async handleLiveEvent(event, view) {
@@ -739,6 +853,11 @@ function goalSummary(goal) {
   if (typeof text !== 'string' || text.trim() === '') return undefined
   const status = typeof goal.status === 'string' && goal.status !== '' ? `（${goal.status}）` : ''
   return `${truncate(text, 40)}${status}`
+}
+
+/** Job statuses that mean a background task will not update again. */
+function isSettledJobStatus(status) {
+  return ['completed', 'complete', 'done', 'exited', 'failed', 'error', 'cancelled', 'finished', 'success'].includes(status)
 }
 
 function stepKey(turn, step) {

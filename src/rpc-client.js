@@ -73,6 +73,24 @@ export class DshRpcClient extends EventEmitter {
     return this.post('/api/respond', message, { signal, timeoutMs: this.timeoutMs })
   }
 
+  /** Download a session log ZIP (host-only GET channel), returning its bytes. */
+  async downloadSessionZip(sessionId, { signal } = {}) {
+    const url = new URL('/api/session.export', this.baseUrl)
+    url.searchParams.set('sessionId', sessionId)
+    url.searchParams.set('includeDescendants', 'true')
+    let response
+    try {
+      response = await fetch(url, { signal: signal ?? AbortSignal.timeout(this.timeoutMs) })
+    } catch (error) {
+      throw new Error(`连接 Harness 失败（session.export）：${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (!response.ok) {
+      const text = await response.text().catch(() => '')
+      throw new Error(`导出会话失败：HTTP ${response.status}${text ? `：${text.slice(0, 200)}` : ''}`)
+    }
+    return Buffer.from(await response.arrayBuffer())
+  }
+
   async post(path, body, { signal, timeoutMs } = {}) {
     const timeoutSignal = timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs)
     const requestSignal = signal && timeoutSignal ? AbortSignal.any([signal, timeoutSignal]) : signal ?? timeoutSignal

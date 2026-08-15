@@ -111,6 +111,11 @@ export async function runCli(options, io = {}) {
     const commands = new CommandRouter({ controller, renderer, input: terminalInput })
     terminalInput.setCompleter(createCompleter({ controller }))
     terminalInput.setSlashEntries(() => slashEntries(controller))
+    // While a turn is in flight the composer stays live: Ctrl+C on it must
+    // cancel the turn (not arm the exit), and the spinner must not paint
+    // over the pending prompt.
+    terminalInput.busyProvider = () => Boolean(controller.running || controller.activeTurn)
+    renderer.quietActivity = () => terminalInput.current?.context === 'composer'
     if (!options.initialPrompt) renderer.notice('输入 / 唤起命令菜单；/help 查看全部命令')
     if (options.initialPrompt) {
       try {
@@ -131,7 +136,15 @@ export async function runCli(options, io = {}) {
         if (text.trim() === '') continue
         const result = await commands.handle(text)
         if (result.exit) break
-        if (!result.handled) await controller.send(text)
+        if (!result.handled) {
+          // The composer never blocks on a turn: a fresh prompt drives the
+          // turn in the background, and the next submission becomes a steer.
+          Promise.resolve()
+            .then(() => controller.send(text))
+            .catch(error => {
+              if (!terminalInput.closed) renderer.error(formatError(error))
+            })
+        }
       } catch (error) {
         if (error instanceof InputInterrupted) {
           renderer.line('')

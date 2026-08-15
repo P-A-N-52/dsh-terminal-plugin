@@ -24,6 +24,8 @@ export class Renderer {
     this.activity = undefined
     this.activityTimer = undefined
     this.activityFrame = 0
+    this.activityDrawn = false
+    this.quietActivity = undefined
     this.assistantStreaming = false
     this.reasoningShown = false
     this.toolStartedAt = new Map()
@@ -289,6 +291,10 @@ export class Renderer {
       ['/rename <标题>', '重命名当前会话'],
       ['/fork', '从当前会话最近完整回合分叉'],
       ['/usage', 'token 用量与上下文拆解'],
+      ['/search <关键词>', '全文搜索会话并恢复命中'],
+      ['/export [会话ID]', '导出会话日志 ZIP 到当前目录'],
+      ['/jobs', '显示当前会话的后台任务'],
+      ['/skill [名称] [参数]', '列出或调用技能'],
       ['/verbose on|off', '展开或折叠工具结果'],
       ['/status', '显示连接、模型和会话状态'],
       ['/version', '显示 CLI 与宿主版本'],
@@ -342,15 +348,64 @@ export class Renderer {
     this.line(`  上下文  系统 ${formatTokens(context.systemTokens ?? 0)} · 工具 ${formatTokens(context.toolsTokens ?? 0)} · 消息 ${formatTokens(context.messageTokens ?? 0)}`)
   }
 
+  searchList(items, hasMore) {
+    this.clearActivity()
+    this.finishAssistantStream()
+    this.section('搜索命中')
+    items.forEach((item, index) => {
+      const title = item.title || '未命名会话'
+      this.line(`  ${this.ansi.cyan(String(index + 1).padStart(2))}  ${fitText(title, 32)}  ${this.ansi.dim(shortId(item.sessionId))}`)
+      if (item.snippet) this.line(`      ${this.ansi.dim(fitText(item.snippet, 72))}`)
+    })
+    if (hasMore) this.notice('命中过多，只显示前 20 条；换个更具体的关键词试试')
+  }
+
+  jobsList(jobs) {
+    this.clearActivity()
+    this.finishAssistantStream()
+    this.section('后台任务')
+    if (!Array.isArray(jobs) || jobs.length === 0) {
+      this.notice('当前会话没有后台任务')
+      return
+    }
+    jobs.forEach(job => {
+      const status = String(job?.status ?? 'unknown')
+      const colored = status === 'running' ? this.ansi.cyan(status)
+        : ['failed', 'error'].includes(status) ? this.ansi.red(status)
+          : this.ansi.gray(status)
+      const elapsed = Number.isFinite(job?.startedAt)
+        ? ` · ${formatDuration((Number.isFinite(job?.endedAt) ? job.endedAt : Date.now()) - job.startedAt)}`
+        : ''
+      this.line(`  ${colored}  ${job?.label ?? job?.kind ?? job?.id}${this.ansi.dim(elapsed)}`)
+      if (job?.detail) this.line(`      ${this.ansi.dim(fitText(String(job.detail), 72))}`)
+    })
+  }
+
+  skillList(skills) {
+    this.clearActivity()
+    this.finishAssistantStream()
+    this.section('技能')
+    skills.forEach((skill, index) => {
+      const userOnly = skill.modelInvocable === false ? this.ansi.dim(' · 仅用户') : ''
+      this.line(`  ${this.ansi.cyan(String(index + 1).padStart(2))}  /${skill.name}${userOnly}${skill.description ? ` — ${this.ansi.dim(fitText(skill.description, 56))}` : ''}`)
+    })
+  }
+
   activityStart(label) {
     this.activityStop()
     this.activity = label
     this.activityFrame = 0
+    this.activityDrawn = false
+    // A pending composer keeps its line: the stream itself shows the turn is
+    // alive, so the spinner stays quiet instead of painting over the prompt.
+    if (this.quietActivity?.()) return
     if (!this.output.isTTY || !this.ansi.enabled) {
       this.line(`${this.ansi.gray('·')} ${label}`)
+      this.activityDrawn = true
       return
     }
     this.renderActivity()
+    this.activityDrawn = true
     this.activityTimer = setInterval(() => {
       this.activityFrame = (this.activityFrame + 1) % SPINNER.length
       this.renderActivity()
@@ -360,16 +415,18 @@ export class Renderer {
 
   activityUpdate(label) {
     this.activity = label
+    if (this.quietActivity?.()) return
     if (this.output.isTTY && this.ansi.enabled) this.renderActivity()
   }
 
   activityStop(finalText) {
     if (this.activityTimer !== undefined) clearInterval(this.activityTimer)
     this.activityTimer = undefined
-    if (this.activity !== undefined && this.output.isTTY && this.ansi.enabled) {
+    if (this.activity !== undefined && this.activityDrawn && this.output.isTTY && this.ansi.enabled) {
       this.write(`${this.ansi.cursorStart}${this.ansi.clearLine}`)
     }
     this.activity = undefined
+    this.activityDrawn = false
     if (finalText) this.line(finalText)
   }
 

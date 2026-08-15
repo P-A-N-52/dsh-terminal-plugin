@@ -49,7 +49,10 @@ export class TerminalInput {
     })
     this.rl.on('SIGINT', () => {
       const current = this.current
-      const context = current?.context ?? 'idle'
+      let context = current?.context ?? 'idle'
+      // With the composer kept live during a turn, a composer Ctrl+C while
+      // busy means cancel-the-turn, not arm-the-exit.
+      if (context === 'composer' && this.busyProvider?.()) context = 'busy'
       // Erase the menu before the abort moves output past the prompt line.
       this.menu.close()
       // Double Ctrl+C at the composer exits the CLI: the first press arms the
@@ -63,7 +66,7 @@ export class TerminalInput {
       }
       if (context === 'composer') this.armExit()
       current?.abort.abort(new InputInterrupted(context))
-      this.interruptListener?.(context)
+      this.interruptListener?.(context === 'busy' ? 'idle' : context)
     })
     this.rl.on('close', () => {
       this.closed = true

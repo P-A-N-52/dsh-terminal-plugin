@@ -131,6 +131,51 @@ test('slash input outside both registries still falls through to the model', asy
   assert.deepEqual(await router.handle('/skill:code-style'), { handled: false })
 })
 
+test('search requires a keyword', async () => {
+  const router = new CommandRouter({ controller: {}, renderer: {}, input: {} })
+  await assert.rejects(() => router.handle('/search'), /用法/)
+})
+
+test('search lists hits and resumes the picked session', async () => {
+  const resumed = []
+  const router = new CommandRouter({
+    controller: {
+      async searchSessions(query) {
+        assert.equal(query, '修复 测试')
+        return { items: [{ sessionId: 'session-a', title: '修复', snippet: '…修复…' }], hasMore: false }
+      },
+      async switchSession(sessionId, options) { resumed.push([sessionId, options]) },
+    },
+    renderer: { searchList() {} },
+    input: { choose: async () => 0 },
+  })
+  assert.deepEqual(await router.handle('/search "修复 测试"'), { handled: true })
+  assert.deepEqual(resumed, [['session-a', { showHistory: true }]])
+})
+
+test('skill invocation sends the slash literal as a prompt', async () => {
+  const sent = []
+  const router = new CommandRouter({
+    controller: {
+      skills: [{ name: 'code-style', description: 'x' }],
+      async send(text) { sent.push(text) },
+    },
+    renderer: {},
+    input: {},
+  })
+  assert.deepEqual(await router.handle('/skill code-style 检查 src'), { handled: true })
+  assert.deepEqual(sent, ['/code-style 检查 src'])
+})
+
+test('skill rejects unknown names with the available list', async () => {
+  const router = new CommandRouter({
+    controller: { skills: [{ name: 'code-style' }] },
+    renderer: {},
+    input: {},
+  })
+  await assert.rejects(() => router.handle('/skill nope'), /未知技能/)
+})
+
 test('usage command renders the projections view', async () => {
   const view = { tokenUsage: { outputTokens: 3 } }
   let rendered

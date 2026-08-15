@@ -2,6 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Writable } from 'node:stream'
+import { mkdtemp, readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Renderer } from '../src/renderer.js'
 import { SessionController } from '../src/session-controller.js'
 import { InputInterrupted } from '../src/input.js'
@@ -75,6 +78,10 @@ class FakeClient extends EventEmitter {
         return { presets: [{ id: 'coding', trust: 'user', isDefault: true }], authorable: true, hasDocument: true }
       case 'agentPreset.select':
         return {}
+      case 'session.search':
+        return { items: [{ sessionId: 's1', snippet: '…命中…' }], hasMore: false }
+      case 'skill.list':
+        return { skills: [{ name: 'code-style', description: '代码风格', modelInvocable: true }] }
       default:
         throw new Error(`unexpected call ${method}`)
     }
@@ -240,6 +247,74 @@ test('plan projection changes surface a live notice and reach statusInfo', async
     },
   })
   assert.match(context.output.text, /已退出计划模式/)
+})
+
+test('send while a turn runs injects a steering message instead of rejecting', async t => {
+  const context = await createController()
+  t.after(() => context.controller.close())
+  context.controller.running = true
+  const result = await context.controller.send('换个方向')
+  assert.equal(result.kind, 'steer')
+  const prompt = context.client.calls.find(item => item.method === 'session.prompt')
+  assert.equal(prompt.payload.mode, 'steer')
+  assert.equal(context.controller.activeTurn, undefined, 'steer must not hijack the in-flight turn')
+})
+
+test('session/jobs frames mirror jobs and summarize settled tasks', async t => {
+  const context = await createController()
+  t.after(() => context.controller.close())
+  context.client.emit('mux', {
+    rpcId: 'jobs-1',
+    frame: {
+      type: 'session/jobs',
+      sessionId: 's1',
+      jobs: [{ id: 'job1', kind: 'bash', label: 'npm test', status: 'running', startedAt: 1000 }],
+    },
+  })
+  assert.equal(context.controller.jobs.length, 1)
+  context.client.emit('mux', {
+    rpcId: 'jobs-2',
+    frame: {
+      type: 'session/jobs',
+      sessionId: 's1',
+      jobs: [{ id: 'job1', kind: 'bash', label: 'npm test', status: 'completed', startedAt: 1000, endedAt: 60000 }],
+    },
+  })
+  assert.match(context.output.text, /后台任务结束：npm test（59s）/)
+})
+
+test('commands/change refreshes the host command cache', async t => {
+  const context = await createController()
+  t.after(() => context.controller.close())
+  const before = context.client.calls.filter(item => item.method === 'commands/list').length
+  context.client.emit('host', {
+    frame: { type: 'host/remote-event', sessionId: 's1', event: 'commands/change', args: [] },
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  const after = context.client.calls.filter(item => item.method === 'commands/list').length
+  assert.ok(after > before, 'commands/change re-pulls commands/list')
+})
+
+test('exportSession downloads the zip and writes it to the session cwd', async t => {
+  const context = await createController()
+  t.after(() => context.controller.close())
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-export-'))
+  context.controller.cwd = dir
+  context.client.downloadSessionZip = async sessionId => {
+    assert.equal(sessionId, 's1')
+    return Buffer.from('PK\x03\x04fake')
+  }
+  const { path, bytes } = await context.controller.exportSession()
+  const written = await readFile(path)
+  assert.equal(bytes, written.length)
+  assert.ok(path.startsWith(dir))
+  assert.match(path, /dsh-session-.*\.zip$/)
+})
+
+test('skill.list feeds the controller skill cache', async t => {
+  const context = await createController()
+  t.after(() => context.controller.close())
+  assert.deepEqual(context.controller.skills.map(skill => skill.name), ['code-style'])
 })
 
 test('selectAgentPreset switches preset and refreshes host commands', async t => {

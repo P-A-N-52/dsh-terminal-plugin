@@ -19,6 +19,10 @@ export const LOCAL_COMMANDS = {
   '/rename': { description: '重命名当前会话', hint: '<标题>' },
   '/fork': { description: '从当前会话最近完整回合分叉' },
   '/usage': { description: 'token 用量与上下文拆解' },
+  '/search': { description: '全文搜索会话内容并恢复命中会话', hint: '<关键词>' },
+  '/export': { description: '导出会话日志 ZIP 到当前目录', hint: '[会话ID]', completeArg: 'session' },
+  '/jobs': { description: '显示当前会话的后台任务' },
+  '/skill': { description: '列出或调用技能（skill）', hint: '[名称] [参数]', completeArg: 'skill' },
   '/verbose': { description: '展开或折叠工具结果', hint: 'on|off', completeArg: 'onoff' },
   '/debug': { description: '显示协议调试信息', hint: 'on|off', completeArg: 'onoff' },
   '/status': { description: '显示连接、模型和会话状态' },
@@ -99,6 +103,20 @@ export class CommandRouter {
         return { handled: true }
       case '/usage':
         this.renderer.usage(this.controller.usageView())
+        return { handled: true }
+      case '/search':
+        await this.search(words)
+        return { handled: true }
+      case '/export': {
+        const { path, bytes } = await this.controller.exportSession(words[0])
+        this.renderer.success(`会话日志已导出：${path}（${bytes} 字节）`)
+        return { handled: true }
+      }
+      case '/jobs':
+        this.renderer.jobsList(this.controller.jobs)
+        return { handled: true }
+      case '/skill':
+        await this.skill(words)
         return { handled: true }
       case '/version': {
         const host = this.controller.hostDescription?.version ?? 'unknown'
@@ -300,6 +318,53 @@ export class CommandRouter {
     const result = await this.controller.executeHostCommand(line)
     if (result?.kind === 'error') throw new Error(result.text ?? `命令执行失败：${line}`)
     if (result?.text) this.renderer.notice(result.text)
+  }
+
+  /**
+   * Full-text session search: list hits with snippets and offer to resume
+   * one through the same picker as /resume.
+   */
+  async search(words) {
+    const query = words.join(' ').trim()
+    if (query === '') throw new Error('用法：/search <关键词>')
+    const { items, hasMore } = await this.controller.searchSessions(query)
+    if (items.length === 0) {
+      this.renderer.notice(`没有命中「${query}」的会话`)
+      return
+    }
+    this.renderer.searchList(items, hasMore)
+    const index = await this.input.choose('恢复哪一个？[0 取消] › ', items.length, {
+      allowZero: true,
+      context: 'search-choice',
+    })
+    if (index === undefined) return
+    await this.controller.switchSession(items[index].sessionId, { showHistory: true })
+  }
+
+  /**
+   * List or invoke skills. Invocation is plain text (`/name args`) — the
+   * host's pre-step expands the skill body, same as the web composer's pick.
+   */
+  async skill(words) {
+    const skills = this.controller.skills.length > 0
+      ? this.controller.skills
+      : await this.controller.refreshSkills()
+    if (skills.length === 0) throw new Error('当前会话没有可调用的技能')
+    let name = words[0]
+    if (!name) {
+      this.renderer.skillList(skills)
+      const index = await this.input.choose('调用哪个技能？[0 取消] › ', skills.length, {
+        allowZero: true,
+        context: 'skill-choice',
+      })
+      if (index === undefined) return
+      name = skills[index].name
+    }
+    if (!skills.some(skill => skill.name === name)) {
+      throw new Error(`未知技能 ${name}；可用：${skills.map(skill => skill.name).join('、')}`)
+    }
+    const extra = words.slice(1).join(' ')
+    await this.controller.send(`/${name}${extra ? ` ${extra}` : ''}`)
   }
 
   approval(policy) {

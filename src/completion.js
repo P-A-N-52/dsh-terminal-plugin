@@ -26,6 +26,7 @@ export function createCompleter({ controller }) {
     permission: () => controller.permissionView()?.options?.map(option => option.value) ?? [],
     preset: () => cached('presets', async () => (await controller.listAgentPresets()).presets.map(preset => preset.id)),
     session: () => cached('sessions', async () => (await controller.listSessions()).map(item => item.sessionId)),
+    skill: () => (controller.skills ?? []).map(skill => skill.name),
     approval: () => ['ask', 'allow', 'deny'],
     onoff: () => ['on', 'off'],
   }
@@ -82,6 +83,15 @@ export function slashEntries(controller) {
       name,
       description: descriptor.description ?? '',
       takesArg: Boolean(descriptor.input?.hint),
+    })
+  }
+  for (const skill of controller.skills ?? []) {
+    const name = `/${skill?.name}`
+    if (typeof skill?.name !== 'string' || entries.some(entry => entry.name === name)) continue
+    entries.push({
+      name,
+      description: skill.description ? `${skill.description} · 技能` : '技能',
+      takesArg: true,
     })
   }
   return entries.sort((left, right) => (left.name < right.name ? -1 : 1))

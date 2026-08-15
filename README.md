@@ -111,6 +111,10 @@ dsh setup --clear
 /fork                         从最近完整回合分叉
 /approval ask|allow|deny      本 CLI 如何应答审批询问（不改会话权限）
 /usage                        token 用量与上下文拆解
+/search <关键词>              全文搜索会话并恢复命中（需部署开启会话索引）
+/export [会话ID]              导出会话日志 ZIP 到当前目录
+/jobs                         显示当前会话的后台任务
+/skill [名称] [参数]          列出或调用技能（skill）
 /verbose on|off               展开或折叠工具输出
 /debug on|off                 显示协议调试信息
 /status                       显示当前状态
@@ -182,7 +186,8 @@ Bash / Zsh / PowerShell
 
 - 0.1 版仅处理文本输入；终端图片附件尚未接入。
 - 设置、凭据编辑和模型提供方创建仍使用官方 Web UI。
-- 当前回合运行时不开放并发 queue/steer 编辑，先取消或等待完成。
+- 回合运行中再发消息会作为 steering 消息注入（`session.prompt mode:'steer'`）；队列消息的编辑/删除（`session.updateQueue`）尚未接入。
+- 会话全文搜索依赖部署开启 session-query 索引；关闭时 `/search` 会给出明确报错。
 - Harness 仍处于开发预览阶段；宿主版本不等于 `0.1.0-rc.5` 时，CLI 会显示协议兼容警告。
 
 ## 开发与测试

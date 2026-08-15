@@ -74,3 +74,20 @@ test('Ctrl+C outside the composer never arms the exit', async () => {
   assert.equal(terminal.exitArmed, false)
   terminal.close()
 })
+
+test('composer Ctrl+C while busy reports idle (cancel) instead of arming exit', async () => {
+  const { terminal } = createInput()
+  let exits = 0
+  const contexts = []
+  terminal.onExit(() => { exits += 1 })
+  terminal.onInterrupt(context => contexts.push(context))
+  terminal.busyProvider = () => true
+  const interrupted = terminal.question('› ', { context: 'composer' }).catch(error => error)
+  terminal.rl.emit('SIGINT')
+  const error = await interrupted
+  assert.ok(error instanceof InputInterrupted)
+  assert.equal(exits, 0)
+  assert.equal(terminal.exitArmed, false)
+  assert.deepEqual(contexts, ['idle'], 'busy composer reports the cancel path')
+  terminal.close()
+})
