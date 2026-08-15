@@ -271,6 +271,8 @@ export class Renderer {
     this.line(`  审批    ${approvalLabel(info.approvalPolicy)}`)
     this.line(`  预设    ${info.agentPreset ?? '-'}`)
     this.line(`  权限    ${info.permission ?? '-'}`)
+    this.line(`  计划    ${info.planActive ? this.ansi.cyan('计划模式') : '-'}`)
+    if (info.goal) this.line(`  目标    ${info.goal}`)
   }
 
   help() {
@@ -296,7 +298,7 @@ export class Renderer {
     ]
     for (const [command, description] of rows) this.line(`  ${this.ansi.cyan(command.padEnd(30))}${description}`)
     this.line('')
-    this.notice('输入 / 唤起命令菜单：↑↓ 选择，Enter 执行或补全，Esc 关闭，Tab 补全参数。其他斜杠命令（例如 /plan、/compact、/goal）会原样交给 Harness。多行输入：行尾写 \\ 后继续。')
+    this.notice('输入 / 唤起命令菜单：↑↓ 选择，Enter 执行或补全，Esc 关闭，Tab 补全参数。Harness 原生命令（/plan、/compact、/goal 等）经命令注册表执行；未知斜杠输入才会发给模型。多行输入：行尾写 \\ 后继续。')
   }
 
   presetList(presets, currentId) {

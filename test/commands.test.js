@@ -62,21 +62,73 @@ test('permission command rejects unknown preset names', async () => {
   await assert.rejects(() => router.handle('/permission nope'), /未知权限预设/)
 })
 
-test('preset command maps agent-preset-locked to a /new hint', async () => {
+test('preset command on a locked session offers a new session on that preset', async () => {
+  const created = []
+  const lockedController = {
+    agentPreset: 'standard',
+    cwd: '/workspace',
+    async listAgentPresets() { return { presets: [{ id: 'standard' }, { id: 'code', name: 'PTC 模式' }], authorable: true } },
+    async selectAgentPreset() {
+      const error = new Error('preset locked')
+      error.code = 'agent-preset-locked'
+      throw error
+    },
+    async newSession(cwd, options) { created.push({ cwd, options }) },
+  }
+  const router = new CommandRouter({
+    controller: lockedController,
+    renderer: {},
+    input: { confirm: async () => true },
+  })
+  assert.deepEqual(await router.handle('/preset code'), { handled: true })
+  assert.deepEqual(created, [{ cwd: '/workspace', options: { agentPreset: 'code' } }])
+})
+
+test('declining the new-session offer keeps the current session', async () => {
+  let created = 0
   const router = new CommandRouter({
     controller: {
       agentPreset: 'standard',
+      cwd: '/workspace',
       async listAgentPresets() { return { presets: [{ id: 'standard' }, { id: 'code' }], authorable: true } },
       async selectAgentPreset() {
         const error = new Error('preset locked')
         error.code = 'agent-preset-locked'
         throw error
       },
+      async newSession() { created += 1 },
     },
+    renderer: {},
+    input: { confirm: async () => false },
+  })
+  assert.deepEqual(await router.handle('/preset code'), { handled: true })
+  assert.equal(created, 0)
+})
+
+test('host commands route through the registry instead of the model', async () => {
+  const executed = []
+  const router = new CommandRouter({
+    controller: {
+      hostCommands: [{ name: 'plan' }],
+      async executeHostCommand(line) {
+        executed.push(line)
+        return { kind: 'success', text: 'Plan mode on. Use /plan off to leave.' }
+      },
+    },
+    renderer: { notice() {} },
+    input: {},
+  })
+  assert.deepEqual(await router.handle('/plan'), { handled: true })
+  assert.deepEqual(executed, ['/plan'])
+})
+
+test('slash input outside both registries still falls through to the model', async () => {
+  const router = new CommandRouter({
+    controller: { hostCommands: [{ name: 'plan' }] },
     renderer: {},
     input: {},
   })
-  await assert.rejects(() => router.handle('/preset code'), /\/new/)
+  assert.deepEqual(await router.handle('/skill:code-style'), { handled: false })
 })
 
 test('usage command renders the projections view', async () => {

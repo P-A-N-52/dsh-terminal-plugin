@@ -214,6 +214,34 @@ test('executeHostCommand posts agentId and line to commands/execute', async t =>
   assert.deepEqual(call.payload, { args: { agentId: 's1', line: '/permission read-only' } })
 })
 
+test('plan projection changes surface a live notice and reach statusInfo', async t => {
+  const context = await createController()
+  t.after(() => context.controller.close())
+  context.client.emit('mux', {
+    rpcId: 'projection-plan',
+    frame: {
+      type: 'session/projection',
+      sessionId: 's1',
+      key: 'plan',
+      value: { active: true, pending: false },
+      seq: 10,
+    },
+  })
+  assert.match(context.output.text, /已进入计划模式/)
+  assert.equal(context.controller.statusInfo().planActive, true)
+  context.client.emit('mux', {
+    rpcId: 'projection-plan-off',
+    frame: {
+      type: 'session/projection',
+      sessionId: 's1',
+      key: 'plan',
+      value: { active: false, pending: false },
+      seq: 11,
+    },
+  })
+  assert.match(context.output.text, /已退出计划模式/)
+})
+
 test('selectAgentPreset switches preset and refreshes host commands', async t => {
   const context = await createController()
   t.after(() => context.controller.close())

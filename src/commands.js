@@ -49,7 +49,17 @@ export class CommandRouter {
       return { handled: true }
     }
     command = COMMAND_ALIASES[command] ?? command
-    if (!Object.hasOwn(LOCAL_COMMANDS, command)) return { handled: false }
+    if (!Object.hasOwn(LOCAL_COMMANDS, command)) {
+      // Harness-native commands (/plan, /goal, /compact, /swarm, …) must go
+      // through the commands registry — session.prompt delivers them to the
+      // model as plain text. Only truly unknown slash input falls through
+      // to a prompt (skill commands live outside the registry).
+      if (this.controller.hostCommands?.some(descriptor => `/${descriptor?.name}` === command)) {
+        await this.hostCommand(String(text).trim())
+        return { handled: true }
+      }
+      return { handled: false }
+    }
 
     switch (command) {
       case '/help':
@@ -254,7 +264,8 @@ export class CommandRouter {
       if (index === undefined) return
       id = presets[index].id
     }
-    if (!presets.some(preset => preset.id === id)) {
+    const known = presets.find(preset => preset.id === id)
+    if (!known) {
       throw new Error(`未知 Agent 预设 ${id}；可选：${presets.map(preset => preset.id).join('、')}`)
     }
     if (id === current) {
@@ -265,11 +276,30 @@ export class CommandRouter {
       await this.controller.selectAgentPreset(id)
     } catch (error) {
       if (error?.code === 'agent-preset-locked') {
-        throw new Error('当前会话已开始对话，Agent 预设在创建时固定；请 /new 创建新会话后再选择')
+        // Presets pin at session creation (same rule as the web UI): offer
+        // the natural escape hatch, a fresh session on the chosen preset.
+        const label = known.name ? `${known.name} (${id})` : id
+        const create = await this.input.confirm(
+          `当前会话已开始对话，预设不可更改。用「${label}」创建新会话？`,
+          { defaultValue: false, context: 'preset-new' },
+        )
+        if (!create) return
+        await this.controller.newSession(this.controller.cwd, { agentPreset: id })
+        return
       }
       throw error
     }
     this.renderer.success(`Agent 预设已切换为 ${id}`)
+  }
+
+  /**
+   * Run a Harness-native slash command through the commands registry and
+   * surface its result text (e.g. "Plan mode on. Use /plan off to leave.").
+   */
+  async hostCommand(line) {
+    const result = await this.controller.executeHostCommand(line)
+    if (result?.kind === 'error') throw new Error(result.text ?? `命令执行失败：${line}`)
+    if (result?.text) this.renderer.notice(result.text)
   }
 
   approval(policy) {

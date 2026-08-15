@@ -338,6 +338,8 @@ export class SessionController extends EventEmitter {
       approvalPolicy: this.approvalPolicy,
       agentPreset: this.agentPreset,
       permission: this.projections?.permissions?.currentValue,
+      planActive: Boolean(this.projections?.plan?.active),
+      goal: goalSummary(this.projections?.goal),
     }
   }
 
@@ -375,7 +377,11 @@ export class SessionController extends EventEmitter {
         this.renderer.queueStatus(frame.items.length)
         break
       case 'session/projection':
-        if (typeof frame.key === 'string') this.projections[frame.key] = frame.value
+        if (typeof frame.key === 'string') {
+          const previous = this.projections[frame.key]
+          this.projections[frame.key] = frame.value
+          this.notifyProjectionChange(frame.key, previous, frame.value)
+        }
         break
       default:
         break
@@ -418,6 +424,23 @@ export class SessionController extends EventEmitter {
   onStreamError(error) {
     this.renderer.error(`Harness 事件流错误：${error.message}`)
     this.rejectActive(error)
+  }
+
+  /** Echo mode-relevant projection changes (plan mode, goal) as they happen. */
+  notifyProjectionChange(key, previous, value) {
+    if (key === 'plan') {
+      const was = Boolean(previous?.active)
+      const active = Boolean(value?.active)
+      if (active !== was) this.renderer.notice(active ? '已进入计划模式' : '已退出计划模式')
+      return
+    }
+    if (key === 'goal') {
+      const was = previous?.objective ?? null
+      const now = value?.objective ?? null
+      if (now === was) return
+      if (now) this.renderer.notice(`目标已更新：${truncate(now, 60)}`)
+      else this.renderer.notice('目标已清除')
+    }
   }
 
   async handleLiveEvent(event, view) {
@@ -707,6 +730,15 @@ function currentTimeZone() {
   } catch {
     return undefined
   }
+}
+
+/** One-line summary of the goal projection for /status, if a goal is set. */
+function goalSummary(goal) {
+  if (goal === null || typeof goal !== 'object') return undefined
+  const text = goal.objective ?? goal.title ?? goal.text
+  if (typeof text !== 'string' || text.trim() === '') return undefined
+  const status = typeof goal.status === 'string' && goal.status !== '' ? `（${goal.status}）` : ''
+  return `${truncate(text, 40)}${status}`
 }
 
 function stepKey(turn, step) {

@@ -49,3 +49,23 @@ test('banner carries preset and permission rows', () => {
   assert.match(output.text, /权限 workspace-write/)
   assert.match(output.text, /91e495b8/)
 })
+
+test('status shows plan mode and goal when present', () => {
+  const { output, renderer } = createRenderer()
+  renderer.status({
+    sessionId: 'session-91e495b8-797d-4fcf-9348-550ed7e397a8',
+    cwd: '/tmp',
+    model: { provider: 'deepseek', model: 'deepseek-chat' },
+    routable: true,
+    running: false,
+    hostVersion: '0.0.1',
+    baseUrl: 'http://127.0.0.1:3080/',
+    approvalPolicy: 'ask',
+    agentPreset: 'standard',
+    permission: 'workspace-write',
+    planActive: true,
+    goal: '修复测试（active）',
+  })
+  assert.match(output.text, /计划模式/)
+  assert.match(output.text, /修复测试（active）/)
+})
