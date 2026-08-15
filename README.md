@@ -55,7 +55,7 @@ PowerShell：
 $env:DSH_OFFICIAL_BIN = 'C:\path\to\deepseek-harness\apps\cli\lib\bin.js'
 ```
 
-`DSH_OFFICIAL_BIN` 应指向构建后的 `lib/bin.js`，不要指向尚未编译的 TypeScript 入口。
+`DSH_OFFICIAL_BIN` 应指向构建后的 `lib/bin.js`，不要指向尚未编译的 TypeScript 入口。找不到任何官方 CLI 时，交互终端会询问是否自动执行 `npm install -g @deepseek-ai/dsh` 并把结果固定到用户配置——确认之后启动就再没有任何设置步骤。
 
 ## 常用方式
 
@@ -100,7 +100,7 @@ dsh setup --clear
 
 ```text
 /help                         显示帮助
-/new [目录]                   创建新会话
+/new [目录]                   创建新会话；无参时从工作区选择
 /sessions                     列出会话
 /resume [会话ID或前缀]        恢复会话
 /model [provider/model]       查看或切换模型

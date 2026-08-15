@@ -1,9 +1,12 @@
-import { spawn, execFileSync } from 'node:child_process'
+import { spawn, execFileSync, execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { access, readFile } from 'node:fs/promises'
 import { dirname, extname, join, parse, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { readUserConfig } from './config.js'
+import { readUserConfig, writeUserConfig } from './config.js'
+
+const execFileAsync = promisify(execFile)
 
 export async function resolveOfficialDsh() {
   const override = process.env.DSH_OFFICIAL_BIN
@@ -43,6 +46,51 @@ export async function resolveOfficialDsh() {
     '没有找到官方 DeepSeek Harness CLI。请先构建 Harness，然后运行 '
     + '`dsh setup /path/to/deepseek-harness`，或设置 DSH_OFFICIAL_BIN 指向 apps/cli/lib/bin.js。',
   )
+}
+
+/**
+ * Resolve the official CLI, and when nothing is found offer the brainless
+ * path on interactive terminals: install `@deepseek-ai/dsh` globally and pin
+ * the result, so the next run needs no setup at all.
+ * `install`/`persist` are injectable for tests.
+ */
+export async function ensureOfficialDsh({
+  input,
+  renderer,
+  install = defaultInstall,
+  persist = async executable => writeUserConfig({ officialBin: executable.path }),
+  resolve: resolveFn = resolveOfficialDsh,
+} = {}) {
+  try {
+    return await resolveFn()
+  } catch (error) {
+    if (input?.terminal !== true || typeof input?.confirm !== 'function') throw error
+    renderer?.warning(error.message)
+    const accepted = await input.confirm('现在运行 npm install -g @deepseek-ai/dsh 安装官方 CLI 吗？', {
+      defaultValue: true,
+      context: 'install-official',
+    })
+    if (!accepted) throw error
+    renderer?.activityStart('正在安装 @deepseek-ai/dsh …')
+    try {
+      await install()
+    } finally {
+      renderer?.activityStop()
+    }
+    const executable = await resolveFn()
+    try {
+      await persist(executable)
+      renderer?.success(`已安装并固定官方 CLI：${executable.path}`)
+    } catch {
+      renderer?.success('已安装官方 CLI')
+    }
+    return executable
+  }
+}
+
+async function defaultInstall() {
+  const command = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+  await execFileAsync(command, ['install', '-g', '@deepseek-ai/dsh'], { timeout: 180_000 })
 }
 
 async function loadPackageExecutable(packagePath) {

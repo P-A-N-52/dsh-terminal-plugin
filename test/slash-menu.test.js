@@ -134,6 +134,14 @@ test('submit-bound Enter erases the menu before readline echoes a newline', asyn
   assert.ok(drain(output).includes('\x1b[2K'), 'rows erased while still on the prompt line')
 })
 
+test('unchanged menu state does not repaint', async () => {
+  const { output, menu } = createMenu()
+  await menu.sync('/', 'composer')
+  drain(output)
+  await menu.sync('/', 'composer')
+  assert.equal(drain(output), '', 'identical state skips the render')
+})
+
 test('menu stays closed outside the composer context', async () => {
   const { menu } = createMenu()
   await menu.sync('/', 'approval')

@@ -5,7 +5,7 @@ import { SessionController } from './session-controller.js'
 import { CommandRouter } from './commands.js'
 import { createCompleter, slashEntries } from './completion.js'
 import { HarnessHostProcess } from './host-process.js'
-import { resolveOfficialDsh } from './official-dsh.js'
+import { ensureOfficialDsh } from './official-dsh.js'
 import { cliHelp } from './args.js'
 import { TARGET_HARNESS_VERSION } from './utils.js'
 
@@ -49,8 +49,9 @@ export async function runCli(options, io = {}) {
   try {
     let baseUrl = options.connect
     if (!baseUrl) {
+      terminalInput = new TerminalInput({ input: inputStream, output })
       renderer.activityStart('正在启动 DeepSeek Harness')
-      const executable = await resolveOfficialDsh()
+      const executable = await ensureOfficialDsh({ input: terminalInput, renderer })
       const env = {
         ...process.env,
         ...(options.toolsMode ? { DSH_TOOLS_MODE: options.toolsMode } : {}),
@@ -69,7 +70,7 @@ export async function runCli(options, io = {}) {
     }
 
     client = new DshRpcClient(baseUrl, { debug: options.debug })
-    terminalInput = new TerminalInput({ input: inputStream, output })
+    terminalInput ??= new TerminalInput({ input: inputStream, output })
     controller = new SessionController({
       client,
       renderer,
@@ -116,6 +117,8 @@ export async function runCli(options, io = {}) {
     // over the pending prompt.
     terminalInput.busyProvider = () => Boolean(controller.running || controller.activeTurn)
     renderer.quietActivity = () => terminalInput.current?.context === 'composer'
+    renderer.composerLine = () => terminalInput.current?.context === 'composer'
+    renderer.composerRedraw = () => terminalInput.redrawComposer()
     if (!options.initialPrompt) renderer.notice('输入 / 唤起命令菜单；/help 查看全部命令')
     if (options.initialPrompt) {
       try {

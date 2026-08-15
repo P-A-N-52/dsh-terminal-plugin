@@ -26,6 +26,8 @@ export class Renderer {
     this.activityFrame = 0
     this.activityDrawn = false
     this.quietActivity = undefined
+    this.composerLine = undefined
+    this.composerRedraw = undefined
     this.assistantStreaming = false
     this.reasoningShown = false
     this.toolStartedAt = new Map()
@@ -53,7 +55,12 @@ export class Renderer {
   line(text = '') {
     this.clearActivity()
     this.finishAssistantStream()
+    // With the composer kept live, discrete prints briefly clear the input
+    // row and reprint it afterwards instead of splicing into it.
+    const composerActive = this.composerLine?.() === true
+    if (composerActive) this.write(`\r${this.ansi.clearLine}`)
     this.write(`${text}\n`)
+    if (composerActive) this.composerRedraw?.()
   }
 
   debug(text) {
@@ -162,6 +169,7 @@ export class Renderer {
     this.toolStartedAt.set(callId, Date.now())
     const detail = summarizeToolCall(name, rawArguments, view)
     this.line(`${this.ansi.cyan(toolIcon(name))} ${this.ansi.bold(name)}${detail ? `  ${this.ansi.dim(detail)}` : ''}`)
+    for (const line of diffCardLines(view)) this.line(`  ${this.ansi.dim(line)}`)
   }
 
   toolResult(callId, { text, error, view } = {}) {
@@ -177,6 +185,7 @@ export class Renderer {
     if (rendered !== '') {
       for (const line of rendered.split('\n')) this.line(`     ${this.ansi.dim(line)}`)
     }
+    for (const line of diffCardLines(view)) this.line(`     ${this.ansi.dim(line)}`)
     if (error) this.line(`     ${this.ansi.red(truncate(error.message ?? error, 300))}`)
   }
 
@@ -215,11 +224,16 @@ export class Renderer {
     if (count > 0) this.notice(`队列中还有 ${count} 条消息`)
   }
 
-  approvalRequest({ toolName, reason }) {
+  approvalRequest({ toolName, reason }, call) {
     this.clearActivity()
     this.finishAssistantStream()
     this.line(`${this.ansi.yellow('⚠')} ${this.ansi.bold(toolName)} 请求执行权限`)
     if (reason) this.line(`  ${this.ansi.dim(reason)}`)
+    if (call) {
+      const detail = summarizeToolCall(call.name, call.arguments, call.view)
+      if (detail) this.line(`  ${this.ansi.dim(detail)}`)
+      for (const line of diffCardLines(call.view)) this.line(`  ${this.ansi.dim(line)}`)
+    }
   }
 
   question(question, index, total) {
@@ -391,6 +405,17 @@ export class Renderer {
     })
   }
 
+  workspaceList(workspaces) {
+    this.clearActivity()
+    this.finishAssistantStream()
+    this.section('工作区')
+    workspaces.forEach((workspace, index) => {
+      const path = workspace.path ?? workspace.cwd ?? ''
+      const title = workspace.title && workspace.title !== path ? `${workspace.title}  ${this.ansi.dim(path)}` : path
+      this.line(`  ${this.ansi.cyan(String(index + 1).padStart(2))}  ${fitText(title, 60)}`)
+    })
+  }
+
   activityStart(label) {
     this.activityStop()
     this.activity = label
@@ -521,6 +546,24 @@ function readViewSummary(view) {
     if (typeof candidate[key] === 'string' && candidate[key].trim() !== '') return candidate[key]
   }
   return undefined
+}
+
+/**
+ * Compact lines for a `card:'diff'` ToolEventView: one per file with line
+ * deltas. Full old/new texts stay on the host; the terminal shows the shape
+ * of the change, not the whole patch.
+ */
+function diffCardLines(view, { maxFiles = 5 } = {}) {
+  const candidate = view?.view ?? view
+  if (candidate?.card !== 'diff' || !Array.isArray(candidate.diffs)) return []
+  const lines = candidate.diffs.slice(0, maxFiles).map(diff => {
+    const newLines = typeof diff.newText === 'string' ? diff.newText.split('\n').length : 0
+    if (diff.oldText === null || diff.oldText === undefined) return `✎ ${diff.path}（新建 ${newLines} 行）`
+    const oldLines = String(diff.oldText).split('\n').length
+    return `✎ ${diff.path}（-${oldLines} +${newLines} 行）`
+  })
+  if (candidate.diffs.length > maxFiles) lines.push(`… 共 ${candidate.diffs.length} 个文件`)
+  return lines
 }
 
 function summarizeToolResult(text, view, verbose) {

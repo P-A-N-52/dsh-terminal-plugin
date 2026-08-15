@@ -176,6 +176,32 @@ test('skill rejects unknown names with the available list', async () => {
   await assert.rejects(() => router.handle('/skill nope'), /未知技能/)
 })
 
+test('new without arguments offers the workspace picker', async () => {
+  const created = []
+  const router = new CommandRouter({
+    controller: {
+      cwd: '/current',
+      async listWorkspaces() { return [{ path: '/ws/one', title: 'one' }, { path: '/ws/two' }] },
+      async newSession(cwd) { created.push(cwd) },
+    },
+    renderer: { workspaceList() {} },
+    input: { choose: async () => 1 },
+  })
+  assert.deepEqual(await router.handle('/new'), { handled: true })
+  assert.deepEqual(created, ['/ws/two'])
+})
+
+test('new with a path skips the picker', async () => {
+  const created = []
+  const router = new CommandRouter({
+    controller: { async newSession(cwd) { created.push(cwd) } },
+    renderer: {},
+    input: {},
+  })
+  await router.handle('/new /tmp/demo')
+  assert.deepEqual(created, ['/tmp/demo'])
+})
+
 test('usage command renders the projections view', async () => {
   const view = { tokenUsage: { outputTokens: 3 } }
   let rendered

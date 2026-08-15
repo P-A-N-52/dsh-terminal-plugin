@@ -80,6 +80,8 @@ class FakeClient extends EventEmitter {
         return {}
       case 'session.search':
         return { items: [{ sessionId: 's1', snippet: '…命中…' }], hasMore: false }
+      case 'workspace.list':
+        return { items: [] }
       case 'skill.list':
         return { skills: [{ name: 'code-style', description: '代码风格', modelInvocable: true }] }
       default:
@@ -315,6 +317,32 @@ test('skill.list feeds the controller skill cache', async t => {
   const context = await createController()
   t.after(() => context.controller.close())
   assert.deepEqual(context.controller.skills.map(skill => skill.name), ['code-style'])
+})
+
+test('approval request shows the paired tool call command', async t => {
+  const context = await createController({
+    confirm: async () => true,
+    question: async () => 'answer',
+  })
+  t.after(() => context.controller.close())
+  context.client.emit('mux', {
+    rpcId: 'ev-call',
+    frame: {
+      type: 'session/event',
+      sessionId: 's1',
+      event: {
+        type: 'tool/call', seq: 5, time: 5,
+        data: { turn: 1, step: 1, callId: 'call1', name: 'bash', arguments: '{"command":"rm -rf /tmp/x"}' },
+      },
+    },
+  })
+  await context.controller.eventChain
+  context.client.emit('mux', {
+    rpcId: 'approval-c1',
+    frame: { type: 'approval/requested', sessionId: 's1', approvalId: 'a1', toolName: 'bash', callId: 'call1', reason: 'run' },
+  })
+  await context.controller.interactionChain
+  assert.match(context.output.text, /rm -rf \/tmp\/x/)
 })
 
 test('selectAgentPreset switches preset and refreshes host commands', async t => {

@@ -31,6 +31,7 @@ export class SessionController extends EventEmitter {
     this.skills = []
     this.jobs = []
     this.jobsSeen = new Map()
+    this.recentToolCalls = new Map()
     this.routable = undefined
     this.hostDescription = undefined
     this.running = false
@@ -117,6 +118,7 @@ export class SessionController extends EventEmitter {
     this.projections = { ...(history.projections?.values ?? {}) }
     this.jobs = []
     this.jobsSeen.clear()
+    this.recentToolCalls.clear()
     const entries = [...history.events].sort((a, b) => a.event.seq - b.event.seq)
     await this.refreshModels({ quiet: true })
     await this.refreshHostCommands()
@@ -502,6 +504,12 @@ export class SessionController extends EventEmitter {
     }
   }
 
+  /** Workspaces for the /new directory picker; empty when the host lacks them. */
+  async listWorkspaces() {
+    const value = await this.client.call('workspace.list', {})
+    return Array.isArray(value?.items) ? value.items : []
+  }
+
   /** User-invocable skills on this session, for /skill and menu completion. */
   async refreshSkills() {
     if (!this.sessionId) return []
@@ -656,6 +664,15 @@ export class SessionController extends EventEmitter {
         break
       }
       case 'tool/call':
+        if (data.callId !== undefined) {
+          // Approval frames reference the call by id without repeating its
+          // arguments; keep a small lookup so the prompt can show the same
+          // command the web panel shows.
+          this.recentToolCalls.set(data.callId, { name: data.name, arguments: data.arguments, view })
+          if (this.recentToolCalls.size > 200) {
+            this.recentToolCalls.delete(this.recentToolCalls.keys().next().value)
+          }
+        }
         if (render) this.renderer.toolCall(data.callId, data.name, data.arguments, view)
         break
       case 'tool/result': {
@@ -727,7 +744,8 @@ export class SessionController extends EventEmitter {
     if (this.approvalPolicy === 'allow') outcome = 'allowed-once'
     else if (this.approvalPolicy === 'deny') outcome = 'rejected'
     else {
-      this.renderer.approvalRequest(frame)
+      const call = frame.callId !== undefined ? this.recentToolCalls.get(frame.callId) : undefined
+      this.renderer.approvalRequest(frame, call)
       try {
         const allowed = await this.input.confirm('允许这次操作吗？', { defaultValue: false, context: 'approval' })
         outcome = allowed ? 'allowed-once' : 'rejected'

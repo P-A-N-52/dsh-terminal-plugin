@@ -72,7 +72,7 @@ export class CommandRouter {
       case '/exit':
         return { handled: true, exit: true }
       case '/new':
-        await this.controller.newSession(words.length > 0 ? words.join(' ') : this.controller.cwd)
+        await this.newSession(words)
         return { handled: true }
       case '/sessions':
         await this.showSessions()
@@ -153,6 +153,34 @@ export class CommandRouter {
     const sessions = await this.controller.listSessions()
     this.renderer.sessionList(sessions.slice(0, 50))
     return sessions
+  }
+
+  /**
+   * /new: with an argument it stays a plain path; without one it mirrors the
+   * web composer's workspace dropdown and offers known workspaces.
+   */
+  async newSession(words) {
+    if (words.length > 0) {
+      await this.controller.newSession(words.join(' '))
+      return
+    }
+    let workspaces = []
+    try {
+      workspaces = await this.controller.listWorkspaces()
+    } catch {
+      workspaces = []
+    }
+    if (workspaces.length === 0) {
+      await this.controller.newSession(this.controller.cwd)
+      return
+    }
+    this.renderer.workspaceList(workspaces)
+    const index = await this.input.choose('新会话用哪个目录？[0 当前目录] › ', workspaces.length, {
+      allowZero: true,
+      context: 'workspace-choice',
+    })
+    const target = index === undefined ? this.controller.cwd : (workspaces[index].path ?? this.controller.cwd)
+    await this.controller.newSession(target)
   }
 
   async resume(requested) {

@@ -145,6 +145,11 @@ export class SlashMenu {
 
   render() {
     if (!this.terminal) return
+    // Keypresses that change nothing visible (e.g. the trailing sync after an
+    // arrow move) must not repaint: one render per visible state.
+    const signature = `${this.selected}:${this.offset}:${this.entries.map(entry => entry.name).join(',')}`
+    if (signature === this.renderedSignature) return
+    this.renderedSignature = signature
     this.erase()
     const maxWidth = Math.max(20, terminalColumns(this.output) - 1)
     const visible = this.entries.slice(this.offset, this.offset + MAX_ROWS)
@@ -184,6 +189,7 @@ export class SlashMenu {
     this.entries = []
     this.selected = 0
     this.offset = 0
+    this.renderedSignature = undefined
     this.erase()
   }
 }

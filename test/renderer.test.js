@@ -69,3 +69,30 @@ test('status shows plan mode and goal when present', () => {
   assert.match(output.text, /计划模式/)
   assert.match(output.text, /修复测试（active）/)
 })
+
+test('line clears and redraws the pending composer around prints', () => {
+  const { output, renderer } = createRenderer()
+  let redraws = 0
+  renderer.composerLine = () => true
+  renderer.composerRedraw = () => { redraws += 1; output.write('PROMPT>') }
+  renderer.line('hello')
+  assert.equal(redraws, 1)
+  assert.ok(output.text.indexOf('hello') < output.text.indexOf('PROMPT>'), 'composer reprints after the output line')
+})
+
+test('diff card renders per-file line deltas', () => {
+  const { output, renderer } = createRenderer()
+  renderer.toolCall('c1', 'edit', '{}', {
+    for: 'call',
+    view: {
+      card: 'diff',
+      title: 'x',
+      diffs: [
+        { path: 'src/a.js', oldText: 'a\nb', newText: 'a\nb\nc' },
+        { path: 'src/b.js', oldText: null, newText: 'x\ny' },
+      ],
+    },
+  })
+  assert.match(output.text, /✎ src\/a\.js（-2 \+3 行）/)
+  assert.match(output.text, /✎ src\/b\.js（新建 2 行）/)
+})

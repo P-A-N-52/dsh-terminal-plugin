@@ -125,6 +125,7 @@ export class TerminalInput {
 
   async question(prompt, { context = 'input', trim = false } = {}) {
     if (this.closed) throw new InputClosed()
+    if (context === 'composer') this.composerPrompt = prompt
     const abort = new AbortController()
     this.current = { abort, context }
     try {
@@ -172,6 +173,15 @@ export class TerminalInput {
       if (Number.isInteger(index) && index >= 1 && index <= count) return index - 1
       this.output.write(`请输入 1-${count}${allowZero ? '，或 0 取消' : ''}。\n`)
     }
+  }
+
+  /**
+   * Reprint the pending composer after renderer output scrolled past it, so
+   * streamed text never strands the user's half-typed line.
+   */
+  redrawComposer() {
+    if (!this.terminal || this.closed || this.current?.context !== 'composer') return
+    this.output.write(`${this.composerPrompt ?? '› '}${this.rl.line ?? ''}`)
   }
 
   close() {
