@@ -3,7 +3,7 @@ import { TerminalInput, InputClosed, InputInterrupted } from './input.js'
 import { DshRpcClient } from './rpc-client.js'
 import { SessionController } from './session-controller.js'
 import { CommandRouter } from './commands.js'
-import { createCompleter } from './completion.js'
+import { createCompleter, slashEntries } from './completion.js'
 import { HarnessHostProcess } from './host-process.js'
 import { resolveOfficialDsh } from './official-dsh.js'
 import { cliHelp } from './args.js'
@@ -110,7 +110,8 @@ export async function runCli(options, io = {}) {
 
     const commands = new CommandRouter({ controller, renderer, input: terminalInput })
     terminalInput.setCompleter(createCompleter({ controller }))
-    if (!options.initialPrompt) renderer.notice('输入 / 唤起命令候选；/help 查看全部命令')
+    terminalInput.setSlashEntries(() => slashEntries(controller))
+    if (!options.initialPrompt) renderer.notice('输入 / 唤起命令菜单；/help 查看全部命令')
     if (options.initialPrompt) {
       try {
         const result = await commands.handle(options.initialPrompt)

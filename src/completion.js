@@ -63,3 +63,26 @@ function commandNames(controller) {
   }
   return [...names].sort()
 }
+
+/**
+ * Menu entries for the slash popup: local commands with their registry
+ * metadata, plus the host's native commands that don't shadow them.
+ * @returns [{ name, description, takesArg }]
+ */
+export function slashEntries(controller) {
+  const entries = Object.entries(LOCAL_COMMANDS).map(([name, meta]) => ({
+    name,
+    description: meta.description ?? '',
+    takesArg: Boolean(meta.hint),
+  }))
+  for (const descriptor of controller.hostCommands ?? []) {
+    const name = `/${descriptor?.name}`
+    if (typeof descriptor?.name !== 'string' || Object.hasOwn(LOCAL_COMMANDS, name)) continue
+    entries.push({
+      name,
+      description: descriptor.description ?? '',
+      takesArg: Boolean(descriptor.input?.hint),
+    })
+  }
+  return entries.sort((left, right) => (left.name < right.name ? -1 : 1))
+}

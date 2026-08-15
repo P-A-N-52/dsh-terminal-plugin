@@ -296,7 +296,7 @@ export class Renderer {
     ]
     for (const [command, description] of rows) this.line(`  ${this.ansi.cyan(command.padEnd(30))}${description}`)
     this.line('')
-    this.notice('输入 / 唤起命令候选，Tab 补全命令与参数。其他斜杠命令（例如 /plan、/compact、/goal）会原样交给 Harness。多行输入：行尾写 \\ 后继续。')
+    this.notice('输入 / 唤起命令菜单：↑↓ 选择，Enter 执行或补全，Esc 关闭，Tab 补全参数。其他斜杠命令（例如 /plan、/compact、/goal）会原样交给 Harness。多行输入：行尾写 \\ 后继续。')
   }
 
   presetList(presets, currentId) {

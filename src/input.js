@@ -1,4 +1,5 @@
 import { createInterface } from 'node:readline/promises'
+import { SlashMenu } from './slash-menu.js'
 
 export class InputInterrupted extends Error {
   constructor(context = 'input') {
@@ -27,7 +28,6 @@ export class TerminalInput {
     this.exitArmed = false
     this.exitTimer = undefined
     this.completer = completer
-    this.slashPopupArmed = true
     this.terminal = Boolean(input.isTTY && output.isTTY)
     this.rl = createInterface({
       input,
@@ -50,6 +50,8 @@ export class TerminalInput {
     this.rl.on('SIGINT', () => {
       const current = this.current
       const context = current?.context ?? 'idle'
+      // Erase the menu before the abort moves output past the prompt line.
+      this.menu.close()
       // Double Ctrl+C at the composer exits the CLI: the first press arms the
       // exit (and interrupts the line as usual), the second within the window
       // requests it. Approvals, questions, and running turns keep their
@@ -67,31 +69,21 @@ export class TerminalInput {
       this.closed = true
       this.current?.abort.abort(new InputClosed())
     })
-    // Slash popup: typing the first '/' into an empty composer fires readline's
-    // own TAB-completion display once (the candidates' shared prefix is '/', so
-    // nothing is inserted). rl.write('\t') would echo a literal tab to the
-    // output — the key-sequence form rl.write(null, { name: 'tab' }) is what
-    // routes through completion. The candidate grid needs two consecutive
-    // TABs; the flag rearms only from a non-slash line, keeping the
-    // synthesized TABs from retriggering themselves.
+    // Interactive slash menu: a prependListener swallows the keys it owns
+    // (arrows, Esc, completing Enter) by mutating the shared key event, while
+    // a trailing listener resyncs the menu from the line readline produced.
+    this.menu = new SlashMenu({ input, output, rl: this.rl, terminal: this.terminal })
+    this.input.prependListener('keypress', (str, key) => {
+      this.menu.handleKeypress(str, key)
+    })
     this.input.on('keypress', (_str, key) => {
       // Any real typing disarms the double-Ctrl+C exit; the arming Ctrl+C
       // itself arrives as a ctrl+c keypress and must not disarm.
       if (this.exitArmed && !(key?.ctrl && key?.name === 'c')) this.disarmExit()
       if (!this.terminal) return
       setImmediate(() => {
-        if (this.closed || this.current?.context !== 'composer') return
-        const line = this.rl.line
-        if (line === '/' && this.slashPopupArmed) {
-          this.slashPopupArmed = false
-          this.rl.write(null, { name: 'tab' })
-          const timer = setTimeout(() => {
-            if (!this.closed && this.rl.line === '/') this.rl.write(null, { name: 'tab' })
-          }, 25)
-          timer.unref?.()
-          return
-        }
-        if (!line.startsWith('/')) this.slashPopupArmed = true
+        if (this.closed) return
+        void this.menu.sync(this.rl.line, this.current?.context)
       })
     })
   }
@@ -99,6 +91,11 @@ export class TerminalInput {
   /** Late-bound completer `(line) => [matches, completeOn]` (async allowed). */
   setCompleter(completer) {
     this.completer = completer
+  }
+
+  /** Provide the slash menu's entries: `() => [{ name, description, takesArg }]`. */
+  setSlashEntries(provider) {
+    this.menu.setEntriesProvider(provider)
   }
 
   onInterrupt(listener) {
@@ -178,6 +175,7 @@ export class TerminalInput {
     if (this.closed) return
     this.closed = true
     this.disarmExit()
+    this.menu.close()
     this.current?.abort.abort(new InputClosed())
     this.rl.close()
   }

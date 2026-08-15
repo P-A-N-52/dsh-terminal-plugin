@@ -9,6 +9,7 @@ export function createAnsi(output = process.stdout) {
     dim: wrap('2', '22'),
     italic: wrap('3', '23'),
     underline: wrap('4', '24'),
+    inverse: wrap('7', '27'),
     red: wrap('31', '39'),
     green: wrap('32', '39'),
     yellow: wrap('33', '39'),
