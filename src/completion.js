@@ -28,6 +28,8 @@ export function createCompleter({ controller }) {
     session: () => cached('sessions', async () => (await controller.listSessions()).map(item => item.sessionId)),
     skill: () => (controller.skills ?? []).map(skill => skill.name),
     approval: () => ['ask', 'allow', 'deny'],
+    feedback: () => ['up', 'down'],
+    queue: () => ['remove', 'steer', 'edit'],
     onoff: () => ['on', 'off'],
   }
 

@@ -1,6 +1,7 @@
 import { createAnsi } from './ansi.js'
 import {
   displayWidth,
+  extractTextBlocks,
   fitText,
   formatDuration,
   formatTokens,
@@ -308,6 +309,10 @@ export class Renderer {
       ['/search <关键词>', '全文搜索会话并恢复命中'],
       ['/export [会话ID]', '导出会话日志 ZIP 到当前目录'],
       ['/jobs', '显示当前会话的后台任务'],
+      ['/agents', '列出当前会话的子代理（只读）'],
+      ['/queue [remove|steer|edit] …', '查看或管理排队消息'],
+      ['/feedback up|down [备注]', '给最近一条回复打分（👍/👎）'],
+      ['/archive [会话ID]', '归档会话，从列表移除（不删数据）'],
       ['/skill [名称] [参数]', '列出或调用技能'],
       ['/verbose on|off', '展开或折叠工具结果'],
       ['/status', '显示连接、模型和会话状态'],
@@ -403,6 +408,46 @@ export class Renderer {
       const userOnly = skill.modelInvocable === false ? this.ansi.dim(' · 仅用户') : ''
       this.line(`  ${this.ansi.cyan(String(index + 1).padStart(2))}  /${skill.name}${userOnly}${skill.description ? ` — ${this.ansi.dim(fitText(skill.description, 56))}` : ''}`)
     })
+  }
+
+  subagentList(entries) {
+    this.clearActivity()
+    this.finishAssistantStream()
+    this.section('子代理')
+    if (!Array.isArray(entries) || entries.length === 0) {
+      this.notice('当前会话没有子代理')
+      return
+    }
+    entries.forEach((entry, index) => {
+      const number = this.ansi.cyan(String(index + 1).padStart(2))
+      if (entry.kind === 'diagnostic') {
+        this.line(`  ${number}  ${this.ansi.red('无法读取')}  ${this.ansi.dim(shortId(entry.id))}  ${this.ansi.dim(entry.reason)}`)
+        return
+      }
+      const activity = entry.activity === 'running' ? this.ansi.cyan('running') : this.ansi.gray('inactive')
+      const mode = this.ansi.dim(entry.mode ?? '')
+      const label = entry.label ? `  ${fitText(entry.label, 40)}` : ''
+      const children = entry.hasChildren ? this.ansi.dim('  · 含下级') : ''
+      this.line(`  ${number}  ${activity}  ${mode}  ${this.ansi.dim(shortId(entry.id))}${label}${children}`)
+    })
+  }
+
+  queueList(items) {
+    this.clearActivity()
+    this.finishAssistantStream()
+    this.section('排队消息')
+    if (!Array.isArray(items) || items.length === 0) {
+      this.notice('队列是空的')
+      return
+    }
+    items.forEach((item, index) => {
+      const placement = item.placement === 'steering' ? this.ansi.cyan('steering')
+        : item.placement === 'context' ? this.ansi.gray('context')
+          : 'queued'
+      const text = extractTextBlocks(item.message?.content) || '(非文本消息)'
+      this.line(`  ${this.ansi.cyan(String(index + 1).padStart(2))}  ${placement}  ${fitText(text, 60)}`)
+    })
+    this.notice('用 /queue remove|steer|edit <编号> [新文本] 管理')
   }
 
   workspaceList(workspaces) {

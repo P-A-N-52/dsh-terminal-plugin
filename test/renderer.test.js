@@ -96,3 +96,32 @@ test('diff card renders per-file line deltas', () => {
   assert.match(output.text, /✎ src\/a\.js（-2 \+3 行）/)
   assert.match(output.text, /✎ src\/b\.js（新建 2 行）/)
 })
+
+test('subagent list renders activity, mode, label, and diagnostic rows', () => {
+  const { output, renderer } = createRenderer()
+  renderer.subagentList([
+    { kind: 'child', id: 'session-aaaa1111-0000-4000-8000-000000000000', mode: 'continuable', activity: 'running', hasChildren: true, label: '探索代码' },
+    { kind: 'diagnostic', id: 'session-bbbb2222-0000-4000-8000-000000000000', reason: 'corrupt' },
+  ])
+  assert.match(output.text, /running/)
+  assert.match(output.text, /continuable/)
+  assert.match(output.text, /探索代码/)
+  assert.match(output.text, /含下级/)
+  assert.match(output.text, /corrupt/)
+  renderer.subagentList([])
+  assert.match(output.text, /当前会话没有子代理/)
+})
+
+test('queue list renders placement and message text', () => {
+  const { output, renderer } = createRenderer()
+  renderer.queueList([
+    { id: 'q1', placement: 'queued', message: { content: [{ type: 'text', text: '等我一下' }] } },
+    { id: 'q2', placement: 'steering', message: { content: [{ type: 'text', text: '换个方向' }] } },
+  ])
+  assert.match(output.text, /queued/)
+  assert.match(output.text, /steering/)
+  assert.match(output.text, /等我一下/)
+  assert.match(output.text, /\/queue remove\|steer\|edit/)
+  renderer.queueList([])
+  assert.match(output.text, /队列是空的/)
+})

@@ -114,6 +114,10 @@ dsh setup --clear
 /search <关键词>              全文搜索会话并恢复命中（需部署开启会话索引）
 /export [会话ID]              导出会话日志 ZIP 到当前目录
 /jobs                         显示当前会话的后台任务
+/agents                       列出当前会话的子代理（只读）
+/queue [remove|steer|edit] …  查看或管理排队消息
+/feedback up|down [备注]      给最近一条回复打分（👍/👎）
+/archive [会话ID]             归档会话，从列表移除（不删数据）
 /skill [名称] [参数]          列出或调用技能（skill）
 /verbose on|off               展开或折叠工具输出
 /debug on|off                 显示协议调试信息

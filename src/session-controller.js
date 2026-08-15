@@ -31,6 +31,8 @@ export class SessionController extends EventEmitter {
     this.skills = []
     this.jobs = []
     this.jobsSeen = new Map()
+    this.queue = []
+    this.lastAssistantMessageId = undefined
     this.recentToolCalls = new Map()
     this.routable = undefined
     this.hostDescription = undefined
@@ -119,6 +121,8 @@ export class SessionController extends EventEmitter {
     this.jobs = []
     this.jobsSeen.clear()
     this.recentToolCalls.clear()
+    this.queue = []
+    this.lastAssistantMessageId = undefined
     const entries = [...history.events].sort((a, b) => a.event.seq - b.event.seq)
     await this.refreshModels({ quiet: true })
     await this.refreshHostCommands()
@@ -396,7 +400,8 @@ export class SessionController extends EventEmitter {
         this.enqueueInteraction(envelope.rpcId, () => this.handleQuestion(envelope.rpcId, frame))
         break
       case 'session/queue':
-        this.renderer.queueStatus(frame.items.length)
+        this.queue = Array.isArray(frame.items) ? frame.items : []
+        this.renderer.queueStatus(this.queue.length)
         break
       case 'session/jobs':
         this.trackJobs(frame)
@@ -510,6 +515,77 @@ export class SessionController extends EventEmitter {
     return Array.isArray(value?.items) ? value.items : []
   }
 
+  /** Read-only view of this session's child subagents (Agent-tool spawns). */
+  async listSubagents() {
+    if (!this.sessionId) throw new Error('还没有活动会话')
+    const value = await this.client.call('subagent.list', { parentSessionId: this.sessionId })
+    return {
+      entries: Array.isArray(value?.entries) ? value.entries : [],
+      parentAvailable: Boolean(value?.parentAvailable),
+    }
+  }
+
+  /**
+   * Archive a session out of the workspace list (same as the web row action).
+   * The session log stays on disk; the current session cannot be archived.
+   * @param requested - session id or unique prefix.
+   */
+  async archiveSession(requested) {
+    const sessions = await this.listSessions()
+    const session = resolveSessionRef(sessions, requested)
+    if (session.sessionId === this.sessionId) throw new Error('不能归档当前会话；先 /new 或 /resume 离开它')
+    const value = await this.client.call('workspace.archiveSession', { sessionId: session.sessionId })
+    this.renderer.success(`已归档会话 ${session.sessionId}`)
+    return value
+  }
+
+  /**
+   * Rate the most recent assistant message (the web UI's 👍/👎). The host
+   * keeps feedback in a Session-bound sidecar and `put` is compare-and-set,
+   * so read the current version first and retry once on a lost race.
+   * @param rating - 'positive' | 'negative'
+   * @param note - optional free-text note (must be non-blank when given).
+   */
+  async submitFeedback(rating, note) {
+    if (!this.sessionId) throw new Error('还没有活动会话')
+    const messageId = this.lastAssistantMessageId
+    if (!messageId) throw new Error('还没有可评分的助手回复')
+    const listed = unwrapFeedback(await this.client.call('messageFeedback.list', { sessionId: this.sessionId }))
+    const existing = (listed?.items ?? []).find(item => item?.messageId === messageId)
+    const payload = {
+      sessionId: this.sessionId,
+      messageId,
+      rating,
+      ...(note ? { note } : {}),
+      ifVersion: existing?.version ?? null,
+    }
+    let item
+    try {
+      item = unwrapFeedback(await this.client.call('messageFeedback.put', payload))
+    } catch (error) {
+      if (error?.code !== 'version-conflict') throw error
+      payload.ifVersion = error.current?.version ?? null
+      item = unwrapFeedback(await this.client.call('messageFeedback.put', payload))
+    }
+    this.renderer.success(`已记录${rating === 'positive' ? '👍 好评' : '👎 差评'}${note ? `（${truncate(note, 40)}）` : ''}`)
+    return item
+  }
+
+  /** Pending inbox items from the latest session/queue snapshot. */
+  queueItems() {
+    return this.queue
+  }
+
+  /**
+   * Edit, remove, or steer one queued message; the next session/queue
+   * snapshot confirms the mutation.
+   * @param action - `{ kind: 'edit', content } | { kind: 'remove' } | { kind: 'steer' }`
+   */
+  async updateQueueItem(itemId, action) {
+    if (!this.sessionId) throw new Error('还没有活动会话')
+    await this.client.call('session.updateQueue', { sessionId: this.sessionId, itemId, action })
+  }
+
   /** User-invocable skills on this session, for /skill and menu completion. */
   async refreshSkills() {
     if (!this.sessionId) return []
@@ -547,15 +623,7 @@ export class SessionController extends EventEmitter {
    */
   async exportSession(requested) {
     let sessionId = this.sessionId
-    if (requested) {
-      const sessions = await this.listSessions()
-      const exact = sessions.find(item => item.sessionId === requested)
-      const prefixed = sessions.filter(item => String(item.sessionId).startsWith(requested))
-      if (exact) sessionId = exact.sessionId
-      else if (prefixed.length === 1) sessionId = prefixed[0].sessionId
-      else if (prefixed.length > 1) throw new Error(`会话前缀 ${requested} 不唯一，请多输入几位`)
-      else throw new Error(`找不到会话 ${requested}`)
-    }
+    if (requested) sessionId = resolveSessionRef(await this.listSessions(), requested).sessionId
     if (!sessionId) throw new Error('还没有活动会话')
     const bytes = await this.client.downloadSessionZip(sessionId)
     const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
@@ -648,6 +716,9 @@ export class SessionController extends EventEmitter {
       case 'assistant/message': {
         const key = stepKey(data.turn, data.step)
         const text = extractTextBlocks(data.message?.content)
+        // Feedback targets the latest append-origin assistant message; history
+        // replay converges on the same value because entries arrive in seq order.
+        if (typeof data.message?.id === 'string') this.lastAssistantMessageId = data.message.id
         if (this.activeTurn && data.usage) this.activeTurn.stepUsage.set(key, data.usage)
         if (render) {
           if (history) this.renderer.assistant(text, { history: true })
@@ -862,6 +933,41 @@ function currentTimeZone() {
   } catch {
     return undefined
   }
+}
+
+/** Resolve a session id or unique prefix against the session list. */
+function resolveSessionRef(sessions, requested) {
+  const exact = sessions.find(item => item.sessionId === requested)
+  if (exact) return exact
+  const prefixed = sessions.filter(item => String(item.sessionId).startsWith(requested))
+  if (prefixed.length === 1) return prefixed[0]
+  if (prefixed.length > 1) throw new Error(`会话前缀 ${requested} 不唯一，请多输入几位`)
+  throw new Error(`找不到会话 ${requested}`)
+}
+
+const FEEDBACK_ERROR_LABELS = {
+  'session-not-found': '会话不存在',
+  'target-not-found': '该消息不可评分（只能评助手正式回复）',
+  'version-conflict': '评分状态已变化，请重试',
+  'note-blank': '备注不能只含空白字符',
+  'note-too-large': '备注超长',
+}
+
+/**
+ * messageFeedback methods answer a business union `{ ok, value | error }`
+ * instead of rejecting; fold it back into value-or-throw. Hosts that flatten
+ * the union pass through untouched.
+ */
+function unwrapFeedback(result) {
+  if (result?.ok === true) return result.value
+  if (result?.ok === false) {
+    const code = typeof result.error?.code === 'string' ? result.error.code : 'internal'
+    const error = new Error(FEEDBACK_ERROR_LABELS[code] ?? `评分失败 [${code}]`)
+    error.code = code
+    error.current = result.error?.current
+    throw error
+  }
+  return result
 }
 
 /** One-line summary of the goal projection for /status, if a goal is set. */

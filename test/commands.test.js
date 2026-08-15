@@ -213,3 +213,91 @@ test('usage command renders the projections view', async () => {
   assert.deepEqual(await router.handle('/usage'), { handled: true })
   assert.equal(rendered, view)
 })
+
+test('agents command lists subagent entries', async () => {
+  let rendered
+  const entries = [{ kind: 'child', id: 'sub-1', mode: 'one-shot', activity: 'inactive', hasChildren: false }]
+  const router = new CommandRouter({
+    controller: { async listSubagents() { return { entries, parentAvailable: true } } },
+    renderer: { subagentList(value) { rendered = value } },
+    input: {},
+  })
+  assert.deepEqual(await router.handle('/agents'), { handled: true })
+  assert.equal(rendered, entries)
+})
+
+test('queue command lists items and edits one by number', async () => {
+  const items = [
+    { id: 'q1', placement: 'queued', message: { content: [{ type: 'text', text: '旧文本' }] } },
+  ]
+  const mutations = []
+  const router = new CommandRouter({
+    controller: {
+      queueItems: () => items,
+      async updateQueueItem(itemId, action) { mutations.push({ itemId, action }) },
+    },
+    renderer: { queueList() {}, success() {} },
+    input: {},
+  })
+  assert.deepEqual(await router.handle('/queue'), { handled: true })
+  await router.handle('/queue edit 1 新文本')
+  assert.deepEqual(mutations, [{ itemId: 'q1', action: { kind: 'edit', content: [{ type: 'text', text: '新文本' }] } }])
+})
+
+test('queue command validates the subcommand and the index', async () => {
+  const router = new CommandRouter({
+    controller: { queueItems: () => [{ id: 'q1' }], async updateQueueItem() {} },
+    renderer: { queueList() {} },
+    input: {},
+  })
+  await assert.rejects(() => router.handle('/queue shuffle 1'), /用法：\/queue/)
+  await assert.rejects(() => router.handle('/queue remove 9'), /编号必须是 1-1/)
+  await assert.rejects(() => router.handle('/queue edit 1'), /用法：\/queue edit/)
+})
+
+test('feedback command maps up/down to ratings and forwards the note', async () => {
+  const seen = []
+  const router = new CommandRouter({
+    controller: { async submitFeedback(rating, note) { seen.push({ rating, note }) } },
+    renderer: {},
+    input: {},
+  })
+  await router.handle('/feedback down 答非所问')
+  assert.deepEqual(seen, [{ rating: 'negative', note: '答非所问' }])
+  await router.handle('/feedback up')
+  assert.deepEqual(seen[1], { rating: 'positive', note: undefined })
+  await assert.rejects(() => router.handle('/feedback meh'), /用法：\/feedback/)
+})
+
+test('archive with an id goes straight to the controller', async () => {
+  const archived = []
+  const router = new CommandRouter({
+    controller: { async archiveSession(id) { archived.push(id) } },
+    renderer: {},
+    input: {},
+  })
+  assert.deepEqual(await router.handle('/archive s-old'), { handled: true })
+  assert.deepEqual(archived, ['s-old'])
+})
+
+test('archive without an id offers the picker excluding the current session', async () => {
+  const archived = []
+  const sessions = [
+    { sessionId: 's1', title: '当前' },
+    { sessionId: 's-old', title: '旧会话' },
+  ]
+  let rendered
+  const router = new CommandRouter({
+    controller: {
+      sessionId: 's1',
+      async listSessions() { return sessions },
+      async archiveSession(id) { archived.push(id) },
+    },
+    renderer: { sessionList(value) { rendered = value }, notice() {} },
+    input: { choose: async () => 0 },
+  })
+  assert.deepEqual(await router.handle('/archive'), { handled: true })
+  assert.equal(rendered.length, 1)
+  assert.equal(rendered[0].sessionId, 's-old')
+  assert.deepEqual(archived, ['s-old'])
+})

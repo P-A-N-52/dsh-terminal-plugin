@@ -22,6 +22,10 @@ export const LOCAL_COMMANDS = {
   '/search': { description: '全文搜索会话内容并恢复命中会话', hint: '<关键词>' },
   '/export': { description: '导出会话日志 ZIP 到当前目录', hint: '[会话ID]', completeArg: 'session' },
   '/jobs': { description: '显示当前会话的后台任务' },
+  '/agents': { description: '列出当前会话的子代理（只读）' },
+  '/queue': { description: '查看或管理排队消息', hint: '[remove|steer|edit] [编号] [新文本]', completeArg: 'queue' },
+  '/feedback': { description: '给最近一条回复打分（👍/👎）', hint: 'up|down [备注]', completeArg: 'feedback' },
+  '/archive': { description: '归档会话，从列表移除（不删数据）', hint: '[会话ID]', completeArg: 'session' },
   '/skill': { description: '列出或调用技能（skill）', hint: '[名称] [参数]', completeArg: 'skill' },
   '/verbose': { description: '展开或折叠工具结果', hint: 'on|off', completeArg: 'onoff' },
   '/debug': { description: '显示协议调试信息', hint: 'on|off', completeArg: 'onoff' },
@@ -114,6 +118,20 @@ export class CommandRouter {
       }
       case '/jobs':
         this.renderer.jobsList(this.controller.jobs)
+        return { handled: true }
+      case '/agents': {
+        const { entries } = await this.controller.listSubagents()
+        this.renderer.subagentList(entries)
+        return { handled: true }
+      }
+      case '/queue':
+        await this.queue(words)
+        return { handled: true }
+      case '/feedback':
+        await this.feedback(words)
+        return { handled: true }
+      case '/archive':
+        await this.archive(words[0])
         return { handled: true }
       case '/skill':
         await this.skill(words)
@@ -401,6 +419,65 @@ export class CommandRouter {
       return
     }
     this.controller.setApprovalPolicy(policy.toLowerCase())
+  }
+
+  /**
+   * Queue dock: bare /queue lists pending inbox items; subcommands mutate one
+   * item through session.updateQueue (the next session/queue frame confirms).
+   */
+  async queue(words) {
+    const items = this.controller.queueItems()
+    const sub = words[0]?.toLowerCase()
+    if (!sub) {
+      this.renderer.queueList(items)
+      return
+    }
+    if (!['remove', 'steer', 'edit'].includes(sub)) {
+      throw new Error('用法：/queue [remove|steer|edit <编号> [新文本]]')
+    }
+    if (items.length === 0) throw new Error('队列是空的')
+    const index = Number(words[1])
+    if (!Number.isInteger(index) || index < 1 || index > items.length) {
+      throw new Error(`编号必须是 1-${items.length}`)
+    }
+    const item = items[index - 1]
+    if (sub === 'edit') {
+      const text = words.slice(2).join(' ').trim()
+      if (text === '') throw new Error('用法：/queue edit <编号> <新文本>')
+      await this.controller.updateQueueItem(item.id, { kind: 'edit', content: [{ type: 'text', text }] })
+      this.renderer.success(`已修改队列消息 #${index}`)
+      return
+    }
+    await this.controller.updateQueueItem(item.id, { kind: sub })
+    this.renderer.success(sub === 'remove' ? `已移除队列消息 #${index}` : `队列消息 #${index} 已转为 steering`)
+  }
+
+  /** 👍/👎 for the latest assistant reply; an optional note follows the direction. */
+  async feedback(words) {
+    const rating = { up: 'positive', good: 'positive', down: 'negative', bad: 'negative' }[words[0]?.toLowerCase()]
+    if (!rating) throw new Error('用法：/feedback up|down [备注]')
+    const note = words.slice(1).join(' ').trim()
+    await this.controller.submitFeedback(rating, note || undefined)
+  }
+
+  /** Archive by id/prefix, or pick from the session list when omitted. */
+  async archive(requested) {
+    if (requested) {
+      await this.controller.archiveSession(requested)
+      return
+    }
+    const sessions = (await this.controller.listSessions()).filter(item => item.sessionId !== this.controller.sessionId)
+    if (sessions.length === 0) {
+      this.renderer.notice('没有可归档的会话（当前会话不能归档）')
+      return
+    }
+    this.renderer.sessionList(sessions.slice(0, 50))
+    const index = await this.input.choose('归档哪一个？[0 取消] › ', Math.min(sessions.length, 50), {
+      allowZero: true,
+      context: 'archive-choice',
+    })
+    if (index === undefined) return
+    await this.controller.archiveSession(sessions[index].sessionId)
   }
 
   toggleRenderer(kind, value) {

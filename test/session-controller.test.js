@@ -80,6 +80,29 @@ class FakeClient extends EventEmitter {
         return {}
       case 'session.search':
         return { items: [{ sessionId: 's1', snippet: '…命中…' }], hasMore: false }
+      case 'session.list':
+        return {
+          items: [
+            { sessionId: 's1', cwd: '/workspace', origin: 'user', running: false },
+            { sessionId: 's-old', cwd: '/workspace', origin: 'user', running: false, title: '旧会话' },
+          ],
+        }
+      case 'subagent.list':
+        return {
+          entries: [
+            { kind: 'child', id: 'sub-1', mode: 'continuable', activity: 'running', hasChildren: true, label: '探索代码' },
+            { kind: 'diagnostic', id: 'sub-2', reason: 'corrupt' },
+          ],
+          parentAvailable: true,
+        }
+      case 'workspace.archiveSession':
+        return { archivedSessionIds: [payload.sessionId] }
+      case 'messageFeedback.list':
+        return { ok: true, value: { items: [] } }
+      case 'messageFeedback.put':
+        return { ok: true, value: { messageId: payload.messageId, rating: payload.rating, version: 'v1' } }
+      case 'session.updateQueue':
+        return { accepted: true }
       case 'workspace.list':
         return { items: [] }
       case 'skill.list':
@@ -353,4 +376,91 @@ test('selectAgentPreset switches preset and refreshes host commands', async t =>
   const select = context.client.calls.find(item => item.method === 'agentPreset.select')
   assert.deepEqual(select.payload, { sessionId: 's1', agentPreset: 'coding' })
   assert.ok(context.controller.hostCommands.some(command => command.name === 'plan'))
+})
+
+test('listSubagents passes the parent id and returns entries verbatim', async t => {
+  const context = await createController()
+  t.after(() => context.controller.close())
+  const { entries, parentAvailable } = await context.controller.listSubagents()
+  assert.equal(parentAvailable, true)
+  assert.equal(entries.length, 2)
+  const call = context.client.calls.find(item => item.method === 'subagent.list')
+  assert.deepEqual(call.payload, { parentSessionId: 's1' })
+})
+
+test('archiveSession resolves a unique prefix and archives that session', async t => {
+  const context = await createController()
+  t.after(() => context.controller.close())
+  await context.controller.archiveSession('s-o')
+  const call = context.client.calls.find(item => item.method === 'workspace.archiveSession')
+  assert.deepEqual(call.payload, { sessionId: 's-old' })
+  assert.match(context.output.text, /已归档会话 s-old/)
+})
+
+test('archiveSession refuses to archive the current session', async t => {
+  const context = await createController()
+  t.after(() => context.controller.close())
+  await assert.rejects(() => context.controller.archiveSession('s1'), /不能归档当前会话/)
+})
+
+test('submitFeedback reads the current version before putting the rating', async t => {
+  const context = await createController()
+  t.after(() => context.controller.close())
+  await context.controller.send('hello')
+  const item = await context.controller.submitFeedback('positive')
+  assert.equal(item.version, 'v1')
+  const list = context.client.calls.find(item => item.method === 'messageFeedback.list')
+  assert.deepEqual(list.payload, { sessionId: 's1' })
+  const put = context.client.calls.find(item => item.method === 'messageFeedback.put')
+  assert.deepEqual(put.payload, { sessionId: 's1', messageId: 'm1', rating: 'positive', ifVersion: null })
+  assert.match(context.output.text, /已记录👍 好评/)
+})
+
+test('submitFeedback retries once with the authoritative version on conflict', async t => {
+  const context = await createController()
+  t.after(() => context.controller.close())
+  await context.controller.send('hello')
+  const original = context.client.call.bind(context.client)
+  let puts = 0
+  context.client.call = async (method, payload) => {
+    if (method === 'messageFeedback.put') {
+      puts += 1
+      if (puts === 1) {
+        context.client.calls.push({ method, payload })
+        return { ok: false, error: { code: 'version-conflict', current: { version: 'v9' } } }
+      }
+    }
+    return original(method, payload)
+  }
+  await context.controller.submitFeedback('negative', '跑题了')
+  const putsSeen = context.client.calls.filter(item => item.method === 'messageFeedback.put')
+  assert.equal(putsSeen.length, 2)
+  assert.equal(putsSeen[1].payload.ifVersion, 'v9')
+  assert.equal(putsSeen[1].payload.note, '跑题了')
+})
+
+test('submitFeedback without an assistant reply fails with a clear error', async t => {
+  const context = await createController()
+  t.after(() => context.controller.close())
+  await assert.rejects(() => context.controller.submitFeedback('positive'), /还没有可评分的助手回复/)
+})
+
+test('session/queue frames mirror items and updateQueueItem posts the action', async t => {
+  const context = await createController()
+  t.after(() => context.controller.close())
+  context.client.emit('mux', {
+    rpcId: 'queue-1',
+    frame: {
+      type: 'session/queue',
+      sessionId: 's1',
+      items: [
+        { id: 'q1', placement: 'queued', message: { role: 'user', content: [{ type: 'text', text: '第一条' }] } },
+        { id: 'q2', placement: 'steering', message: { role: 'user', content: [{ type: 'text', text: '第二条' }] } },
+      ],
+    },
+  })
+  assert.equal(context.controller.queueItems().length, 2)
+  await context.controller.updateQueueItem('q1', { kind: 'remove' })
+  const call = context.client.calls.find(item => item.method === 'session.updateQueue')
+  assert.deepEqual(call.payload, { sessionId: 's1', itemId: 'q1', action: { kind: 'remove' } })
 })
