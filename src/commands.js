@@ -13,7 +13,7 @@ export const LOCAL_COMMANDS = {
   '/sessions': { description: '列出最近会话' },
   '/model': { description: '查看或切换模型', hint: '[provider/model]', completeArg: 'model' },
   '/reasoning': { description: '切换当前模型的推理档位', hint: '[级别]', completeArg: 'reasoning' },
-  '/permission': { description: '切换会话权限预设（同 Web UI 下拉）', hint: '[预设]', completeArg: 'permission' },
+  '/permission': { description: '切换会话权限预设（同 Web UI 下拉，回合中可切）', hint: '[预设]', completeArg: 'permission' },
   '/preset': { description: '查看或切换 Agent 预设（仅空白会话可切）', hint: '[id]', completeArg: 'preset' },
   '/approval': { description: '本 CLI 如何应答审批询问（不改会话权限）', hint: 'ask|allow|deny', completeArg: 'approval' },
   '/rename': { description: '重命名当前会话', hint: '<标题>' },
@@ -282,7 +282,7 @@ export class CommandRouter {
    * The session's real permission preset (sandbox mode + approval policy, the
    * same selector the web composer shows) switched through the Harness
    * commands registry — distinct from /approval, which only decides how this
-   * CLI answers approval prompts.
+   * CLI answers approval prompts. Allowed mid-turn, like the web dropdown.
    */
   async permission(requested) {
     const view = this.controller.permissionView()
@@ -305,7 +305,7 @@ export class CommandRouter {
       this.renderer.notice(`权限预设已是 ${name}`)
       return
     }
-    const result = await this.controller.executeHostCommand(`/permission ${name}`)
+    const result = await this.controller.executeHostCommand(`/permission ${name}`, { allowBusy: true })
     if (result?.kind === 'error') throw new Error(result.text ?? `切换权限预设 ${name} 失败`)
     this.renderer.success(`权限预设已切换为 ${name}`)
   }

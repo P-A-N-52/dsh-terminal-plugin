@@ -301,3 +301,20 @@ test('archive without an id offers the picker excluding the current session', as
   assert.equal(rendered[0].sessionId, 's-old')
   assert.deepEqual(archived, ['s-old'])
 })
+
+test('permission command passes allowBusy so it works mid-turn', async () => {
+  const calls = []
+  const router = new CommandRouter({
+    controller: {
+      permissionView: () => ({
+        options: [{ value: 'read-only' }, { value: 'workspace-write' }],
+        currentValue: 'workspace-write',
+      }),
+      async executeHostCommand(line, options) { calls.push({ line, options }); return { kind: 'success' } },
+    },
+    renderer: { success() {} },
+    input: {},
+  })
+  assert.deepEqual(await router.handle('/permission read-only'), { handled: true })
+  assert.deepEqual(calls, [{ line: '/permission read-only', options: { allowBusy: true } }])
+})

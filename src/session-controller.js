@@ -319,11 +319,14 @@ export class SessionController extends EventEmitter {
    * Run a Harness-native slash command on the current session through the
    * commands registry (the same channel the web UI uses for /permission etc).
    * @param line - the full command line, including the leading slash.
+   * @param allowBusy - pass true for commands the web UI keeps live during a
+   *   turn (e.g. /permission flips the preset mid-turn by design); the host's
+   *   commands service has no busy guard, only the CLI's assertIdle does.
    * @returns the command result `{ kind: 'success' | 'error', text? }`.
    */
-  async executeHostCommand(line) {
+  async executeHostCommand(line, { allowBusy = false } = {}) {
     if (!this.sessionId) throw new Error('还没有活动会话')
-    this.assertIdle(`执行命令 ${line}`)
+    if (!allowBusy) this.assertIdle(`执行命令 ${line}`)
     const value = await this.client.call('commands/execute', {
       args: { agentId: this.sessionId, line },
     })

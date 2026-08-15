@@ -105,7 +105,7 @@ dsh setup --clear
 /resume [会话ID或前缀]        恢复会话
 /model [provider/model]       查看或切换模型
 /reasoning [档位]             切换当前模型的推理档位
-/permission [预设]            切换会话权限预设（沙箱+审批，同 Web UI 下拉）
+/permission [预设]            切换会话权限预设（沙箱+审批，同 Web UI 下拉；回合运行中也可切换）
 /preset [id]                  查看或切换 Agent 预设（仅空白会话可切）
 /rename <标题>                重命名会话
 /fork                         从最近完整回合分叉

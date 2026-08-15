@@ -464,3 +464,14 @@ test('session/queue frames mirror items and updateQueueItem posts the action', a
   const call = context.client.calls.find(item => item.method === 'session.updateQueue')
   assert.deepEqual(call.payload, { sessionId: 's1', itemId: 'q1', action: { kind: 'remove' } })
 })
+
+test('executeHostCommand with allowBusy skips the idle guard', async t => {
+  const context = await createController()
+  t.after(() => context.controller.close())
+  context.controller.running = true
+  await assert.rejects(() => context.controller.executeHostCommand('/plan on'), /不能执行命令/)
+  const result = await context.controller.executeHostCommand('/permission read-only', { allowBusy: true })
+  assert.equal(result.kind, 'success')
+  const call = context.client.calls.find(item => item.method === 'commands/execute')
+  assert.deepEqual(call.payload, { args: { agentId: 's1', line: '/permission read-only' } })
+})

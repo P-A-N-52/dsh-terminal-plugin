@@ -300,7 +300,7 @@ export class Renderer {
       ['/sessions', '列出最近会话'],
       ['/model [provider/model]', '查看或切换模型'],
       ['/reasoning [级别]', '切换当前模型的推理档位'],
-      ['/permission [预设]', '切换会话权限预设（沙箱+审批，同 Web UI 下拉）'],
+      ['/permission [预设]', '切换会话权限预设（沙箱+审批，同 Web UI 下拉，回合中可切）'],
       ['/preset [id]', '查看或切换 Agent 预设（仅空白会话可切）'],
       ['/approval ask|allow|deny', '本 CLI 如何应答审批询问（不改会话权限）'],
       ['/rename <标题>', '重命名当前会话'],
