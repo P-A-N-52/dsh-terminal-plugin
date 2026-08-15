@@ -33,6 +33,7 @@ export class SlashMenu {
     this.active = false
     this.entries = []
     this.selected = 0
+    this.offset = 0
     this.rows = 0
   }
 
@@ -109,6 +110,9 @@ export class SlashMenu {
     this.entries = filtered
     const kept = previous === undefined ? -1 : filtered.findIndex(entry => entry.name === previous)
     this.selected = kept === -1 ? 0 : kept
+    if (kept === -1) this.offset = 0
+    this.offset = Math.min(this.offset, Math.max(0, filtered.length - MAX_ROWS))
+    this.scrollToSelection()
     this.active = true
     this.render()
   }
@@ -116,7 +120,14 @@ export class SlashMenu {
   move(delta) {
     if (this.entries.length === 0) return
     this.selected = (this.selected + delta + this.entries.length) % this.entries.length
+    this.scrollToSelection()
     this.render()
+  }
+
+  /** Slide the visible window so the highlighted entry stays on screen. */
+  scrollToSelection() {
+    if (this.selected < this.offset) this.offset = this.selected
+    else if (this.selected >= this.offset + MAX_ROWS) this.offset = this.selected - MAX_ROWS + 1
   }
 
   /** Fill the highlighted command into the readline buffer and close. */
@@ -136,8 +147,11 @@ export class SlashMenu {
     if (!this.terminal) return
     this.erase()
     const maxWidth = Math.max(20, terminalColumns(this.output) - 1)
-    const visible = this.entries.slice(0, MAX_ROWS)
-    const rows = visible.map((entry, index) => {
+    const visible = this.entries.slice(this.offset, this.offset + MAX_ROWS)
+    const rows = []
+    if (this.offset > 0) rows.push(this.ansi.dim(fitText(`  ↑ 还有 ${this.offset} 条`, maxWidth)))
+    for (let index = 0; index < visible.length; index += 1) {
+      const entry = visible[index]
       const name = entry.name.padEnd(16)
       // Width is computed on plain text; styling wraps afterwards, so escape
       // sequences never disturb the no-wrap guarantee.
@@ -145,11 +159,10 @@ export class SlashMenu {
         ? ` ${truncate(entry.description, Math.min(48, Math.max(0, maxWidth - 19)))}`
         : ''
       const row = fitText(`  ${name}${description}`, maxWidth)
-      return index === this.selected ? this.ansi.inverse(row) : row
-    })
-    if (this.entries.length > visible.length) {
-      rows.push(this.ansi.dim(fitText(`  … 还有 ${this.entries.length - visible.length} 条，继续输入过滤`, maxWidth)))
+      rows.push(this.offset + index === this.selected ? this.ansi.inverse(row) : row)
     }
+    const below = this.entries.length - (this.offset + visible.length)
+    if (below > 0) rows.push(this.ansi.dim(fitText(`  ↓ 还有 ${below} 条，继续输入过滤`, maxWidth)))
     this.rows = rows.length
     // '› ' is two cells; \x1b[nG is 1-based. Relative moves stay correct even
     // when writing the rows scrolled the screen at the bottom edge.
@@ -170,6 +183,7 @@ export class SlashMenu {
     this.active = false
     this.entries = []
     this.selected = 0
+    this.offset = 0
     this.erase()
   }
 }

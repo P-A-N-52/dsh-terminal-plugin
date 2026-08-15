@@ -139,3 +139,53 @@ test('menu stays closed outside the composer context', async () => {
   await menu.sync('/', 'approval')
   assert.equal(menu.active, false)
 })
+
+const MANY_ENTRIES = Array.from({ length: 12 }, (_, index) => ({
+  name: `/cmd${String(index).padStart(2, '0')}`,
+  description: `第 ${index} 条`,
+  takesArg: false,
+}))
+
+function createLongMenu() {
+  const input = new PassThrough()
+  const output = new PassThrough()
+  output.isTTY = true
+  const rl = { line: '/', cursor: 1, write() {} }
+  const menu = new SlashMenu({ input, output, rl, terminal: true })
+  menu.setEntriesProvider(async () => MANY_ENTRIES)
+  return { output, menu }
+}
+
+test('highlight moving past the last visible row scrolls the window', async () => {
+  const { output, menu } = createLongMenu()
+  await menu.sync('/', 'composer')
+  for (let index = 0; index < 8; index += 1) menu.move(1)
+  assert.equal(menu.selected, 8)
+  assert.equal(menu.offset, 1, 'window slides one row to keep the highlight visible')
+  const rendered = drain(output)
+  assert.match(rendered, /↑ 还有 1 条/, 'top hint shows hidden rows above')
+  assert.match(rendered, /\/cmd08/, 'newly visible entry is rendered')
+  assert.match(rendered, /↓ 还有 3 条/, 'bottom hint counts the rest')
+})
+
+test('wrap-around from the first row jumps to the last page', async () => {
+  const { output, menu } = createLongMenu()
+  await menu.sync('/', 'composer')
+  drain(output)
+  menu.move(-1)
+  assert.equal(menu.selected, MANY_ENTRIES.length - 1)
+  assert.equal(menu.offset, MANY_ENTRIES.length - 8)
+  const rendered = drain(output)
+  assert.match(rendered, /\/cmd11/, 'last entry is visible after wrapping')
+  assert.doesNotMatch(rendered, /\/cmd00 /, 'first page scrolled out')
+})
+
+test('filtering back to a short list resets the window', async () => {
+  const { menu } = createLongMenu()
+  await menu.sync('/', 'composer')
+  for (let index = 0; index < 9; index += 1) menu.move(1)
+  assert.ok(menu.offset > 0)
+  await menu.sync('/cmd01', 'composer')
+  assert.equal(menu.offset, 0)
+  assert.equal(menu.selected, 0)
+})
